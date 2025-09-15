@@ -1,98 +1,121 @@
+var Logger = (function () {
+  // ---------------- constants ----------------
+  var LEVEL = {
+    TRACE     : { level: 0,  name: "TRACE"     },
+    DEBUG     : { level: 1,  name: "DEBUG"     },
+    WARNING   : { level: 2,  name: "WARNING"   },
+    INFO      : { level: 3,  name: "INFO"      },
+    CHARACTER : { level: 5,  name: "CHARACTER" },
+    ERROR     : { level: 10, name: "ERROR"     },
+  };
 
-LOG_LEVEL = {
-  TRACE :     {level : 0,  name : "TRACE" },
-  DEBUG :     {level : 1,  name : "DEBUG" },
-  WARNING :   {level : 2,  name : "WARNING" },
-  INFO :      {level : 3,  name : "INFO" },
-  CHARACTER : {level : 5,  name : "CHARACTER" },
-  ERROR :     {level : 10, name : "ERROR" },
-};
+  // ---------------- state ----------------
+  var _buffer = [];      // [{ logLevel, ts, msg }]
 
-class SheetLogger {
+  // ---------------- helpers ----------------
+  function _entry(levelObj, msg) {
+    _buffer.push({ logLevel: levelObj, ts: new Date(), msg: String(msg) });
+  }
 
-  flush(logEntries,opts) {
-    var loggerLevel = 0;
-    try {
-      if (opts?.batch) {
-        loggerLevel = LOG_LEVEL[opts.cfg.component.processor.sheetLoggerLevel.value].level;
-        GSBatch.insert.range(opts.batch,opts.cfg.SHEET_LOG.range,logEntries.length,)
+  // ---------------- sinks ----------------
+
+  // console sink
+  function _flushConsole(entries, opts = DEFAULT_OPTS) {
+    var enabled = opts.cfg?.component?.processor?.scriptLoggerEnabled?.value ?? true;
+    if (enabled) {
+      var minLevel = opts.cfg?.component?.processor?.scriptLoggerLevel?.value ?? 0;
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (e.logLevel.level < minLevel) continue;
+        var dt = GSUtils.Date.formatDate(e.ts, (opts && opts.tz));
+        var line = Utilities.formatString("【 %s 】【 %s 】【 %s 】", dt, e.logLevel.name, e.msg);
+        // Use console.info for uniformity
+        console.info(line);
       }
     }
-    finally {
-      // log to spreadsheet
+
+  }
+
+  // sheet sink (skeleton; fill with your GSBatch call if desired)
+  function _flushSheet(entries, opts = DEFAULT_OPTS) {
+    var enabled = opts.cfg?.component?.processor?.scriptLoggerEnabled?.value ?? true;
+    if (enabled) {
+
+      var minLevel = opts.cfg?.component?.processor?.sheetLoggerLevel?.value ?? 0;
+
+      // TODO: if you want to batch to a sheet, filter first:
+      var rows = [];
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (e.logLevel.level < minLevel) continue;
+        rows.push([
+          GSUtils.Date.formatDate(e.ts, (opts && opts.tz)),
+          e.logLevel.name,
+          e.msg
+        ]);
+      }
+
+
+
+      // Example placeholder (uncomment/replace with your implementation):
+      if (opts && opts.batch && rows.length) {
+        GSBatch.insert.range(opts.batch, GSRange.extendA1(opts.cfg.SHEET_LOG.range, { top:-1, bottom:rows.length, left:0, right:3 } ),SpreadsheetApp.Dimension.ROWS);
+        GSBatch.add.values(opts.batch,opts.cfg.SHEET_LOG.range,rows,{autoSize:true,...opts});
+      }
+
+      // If you want a simple direct write:
+      // if (opts && opts.sheetA1 && rows.length) {
+      //   var rng = GSRange.resolveRange(opts.sheetA1, opts);
+      //   var sheet = rng.getSheet();
+      //   sheet.getRange(rng.getRow(), rng.getColumn(), rows.length, rows[0].length).setValues(rows);
+      // }
     }
   }
 
-}
+  var _sinks = [_flushConsole,_flushSheet];
 
 
-class ConsoleLogger {
-  
-  logToConsole(logEntry,cfg) {
-    const dt = Utilities.formatDate(logEntry.ts, cfg.TIME_ZONE, "yyyy-MM-dd'T'HH:mm:ss");
-    const fmsg = Utilities.formatString("【 %s 】【 %s 】【 %s 】", dt,logEntry.logLevel.name,logEntry.msg); 
-    console.info(fmsg);
-  }
+  // ---------------- public api ----------------
 
-  flush(logEntries, opts = { cfg : Configuration }) {
-    var loggerLevel = 0;
+  // emit
+  function trace(msg)     { _entry(LEVEL.TRACE, msg); }
+  function debug(msg)     { _entry(LEVEL.DEBUG, msg); }
+  function warn(msg)      { _entry(LEVEL.WARNING, msg); }
+  function info(msg)      { _entry(LEVEL.INFO, msg); }
+  function character(msg) { _entry(LEVEL.CHARACTER, msg); }
+  function error(msg)     { _entry(LEVEL.ERROR, msg); }
+
+  // flush buffer to sinks
+  function flush(opts = DEFAULT_OPTS) {
+    var entries = _buffer;
     try {
-      loggerLevel = LOG_LEVEL[opts.cfg.component.processor.scriptLoggerLevel.value].level;
+      _sinks.forEach(s => s(entries,opts));
+    } finally {
+      clear();
     }
-    finally {
-      logEntries.filter( e => e.logLevel.level >= loggerLevel).forEach( e => this.logToConsole(e,opts.cfg));
-    }
   }
 
-}
+  // housekeeping
+  function clear() { _buffer.length = 0; }
+  function size()  { return _buffer.length; }
+  function peek(n) { return _buffer.slice(Math.max(0, _buffer.length - (n || 50))); }
 
-class BatchLogger {
-  constructor(opts = {cfg : Configuration}) {
-    this._opts = opts;
-    this._messageLog = [];
-    this._loggers = [];
+  // export
+  return {
+    LEVEL: LEVEL,
 
-    this._loggers.push(new ConsoleLogger());
-    this._loggers.push(new SheetLogger());
-  }
-  
-  log(logLevel, msg) {
-    const logEntry = {
-      logLevel : logLevel,
-      ts : new Date(), 
-      msg : msg
-    };
+    // emit
+    trace: trace,
+    debug: debug,
+    warn: warn,
+    info: info,
+    character: character,
+    error: error,
 
-    this._messageLog.push(logEntry);
-    //console.info(JSON.stringify(logEntry));
-
-  }
-
-  trace(msg) {
-    this.log(LOG_LEVEL.TRACE,msg);
-  }
-
-  error(msg) {
-    this.log(LOG_LEVEL.ERROR,msg);
-  }
-
-  debug(msg) {
-    this.log(LOG_LEVEL.DEBUG,msg);
-  }
-
-  info(msg) {
-    this.log(LOG_LEVEL.INFO,msg);
-  }
-
-  warn(msg) {
-    this.log(LOG_LEVEL.WARNING,msg);
-  }
-
-  flush() {
-    this._loggers.forEach(l => l.flush(this._messageLog, this._opts));
-  }
-
-}
-
-const DEFAULT_LOGGER = new BatchLogger(Configuration);
-const logger = DEFAULT_LOGGER;
+    // control
+    flush: flush,
+    clear: clear,
+    size:  size,
+    peek:  peek
+  };
+})();

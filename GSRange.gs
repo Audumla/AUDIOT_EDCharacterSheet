@@ -63,14 +63,11 @@ var GSRange = (function () {
    * @param {{spreadsheetId?: string}} [opts]
    * @returns {GoogleAppsScript.Spreadsheet.Range}
    */
-  function resolveRange(arg, opts) {
+  function resolveRange(arg, opts = DEFAULT_OPTS) {
     if (GSUtils.Types.isRangeLike(arg)) return arg;
     if (typeof arg === 'string') {
-      const ss = (opts && opts.spreadsheetId)
-        ? SpreadsheetApp.openById(opts.spreadsheetId)
-        : SpreadsheetApp.getActive();
       const { sheetName, addrOnly } = GSUtils.A1.splitA1(arg);
-      const sh = sheetName ? ss.getSheetByName(sheetName) : ss.getActiveSheet();
+      const sh = sheetName ? opts.ss.getSheetByName(sheetName) : opts.ss.getActiveSheet();
       if (!sh) throw new Error("Sheet not found: " + sheetName);
       return sh.getRange(addrOnly);
     }
@@ -111,8 +108,8 @@ var GSRange = (function () {
    * @param {{trimEmptyRows?: boolean}} [opts]
    * @return {string[][]}
    */
-  function getDisplayArray(rangeOrA1, opts) {
-    opts = opts || {};
+  function getDisplayArray(rangeOrA1, opts = DEFAULT_OPTS) {
+    opts = resolveOpts(opts);
     const trimEmptyRows = opts.trimEmptyRows !== false;
 
     const rng = resolveRange(rangeOrA1, opts);
@@ -146,7 +143,7 @@ var GSRange = (function () {
    * @param {GoogleAppsScript.Spreadsheet.Range|string} rangeOrA1
    * @return {any[][]}
    */
-  function getValuesArrayWithImageRefs(rangeOrA1, opts) {
+  function getValuesArrayWithImageRefs(rangeOrA1, opts = DEFAULT_OPTS) {
     const rng = resolveRange(rangeOrA1, opts);
     const sh  = rng.getSheet();
     const sName = sh.getName();
@@ -202,7 +199,107 @@ var GSRange = (function () {
     return x && typeof x.getA1Notation === 'function' && typeof x.getValues === 'function';
   }
 
+  function ensureSheetOnA1(a1, ss) {
+    const { sheetName, addrOnly } = GSRange.splitA1(a1);
+    if (sheetName) return a1;
+    const shName = ss.getActiveSheet().getName();
+    return GSRange.quoteSheetName(shName) + "!" + addrOnly;
+  }
+
+  /**
+   * extendA1("Sheet!A1:B2", { top:-1, bottom:2, left:0, right:3 }, { clampToSheet:true, ss: SpreadsheetApp.getActive() })
+   * - Extends (or shrinks) an A1 range by deltas on each side.
+   * - Supports "A1" or "A1:B2" (with or without sheet prefix).
+   * - Preserves/quotes the sheet name if present.
+   *
+   * @param {string} a1                   The A1 range to extend.
+   * @param {{top?:number,bottom?:number,left?:number,right?:number, rows?:number, cols?:number}} delta
+   *        Shorthands:
+   *          - rows:   add to bottom (can be negative)
+   *          - cols:   add to right  (can be negative)
+   *        Sided deltas override shorthands when both provided.
+   * @param {{clampToSheet?:boolean, ss?: GoogleAppsScript.Spreadsheet.Spreadsheet}} [opts]
+   *        If clampToSheet true, we clamp to [1..sheet.getMaxRows()], [1..sheet.getMaxColumns()].
+   *        If a sheet name exists in A1 and ss is not passed, we use SpreadsheetApp.getActive().
+   * @returns {string} Extended A1 string (with sheet if provided on input)
+   */
+  function extendA1(a1, delta, opts = DEFAULT_OPTS) {
+    if (typeof a1 !== 'string') throw new Error("extendA1 expects an A1 string");
+    delta = delta || {};
+    opts  = opts  || {};
+
+    // pull sheet + body
+    const { sheetName, addrOnly } = splitA1(a1);
+    const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i.exec(addrOnly.trim());
+    if (!m) throw new Error("extendA1 supports 'A1' or 'A1:B2' (got: " + a1 + ")");
+
+    // original corners (ensure c1<=c2, r1<=r2)
+    let c1 = lettersToIndex(m[1]);
+    let r1 = parseInt(m[2], 10);
+    let c2 = m[3] ? lettersToIndex(m[3]) : c1;
+    let r2 = m[4] ? parseInt(m[4], 10)   : r1;
+    if (c1 > c2) { const t = c1; c1 = c2; c2 = t; }
+    if (r1 > r2) { const t = r1; r1 = r2; r2 = t; }
+
+    // resolve deltas (side wins over shorthand)
+    const dTop    = (delta.top    != null) ? delta.top    : 0;
+    const dBottom = (delta.bottom != null) ? delta.bottom : (delta.rows || 0);
+    const dLeft   = (delta.left   != null) ? delta.left   : 0;
+    const dRight  = (delta.right  != null) ? delta.right  : (delta.cols || 0);
+
+    // apply
+    let nc1 = c1 - dLeft;
+    let nr1 = r1 - dTop;
+    let nc2 = c2 + dRight;
+    let nr2 = r2 + dBottom;
+
+    // clamp to 1-based and optionally to sheet bounds
+    let maxRows = Number.POSITIVE_INFINITY;
+    let maxCols = Number.POSITIVE_INFINITY;
+
+    if (opts.clampToSheet) {
+      // resolve a sheet if we have a sheetName
+      let ss = opts.ss;
+      if (!ss) ss = opts.ss;
+      let sh = null;
+      if (sheetName) {
+        sh = ss.getSheetByName(sheetName);
+        if (!sh) throw new Error("extendA1: sheet not found: " + sheetName);
+      } else {
+        sh = ss.getActiveSheet();
+      }
+      maxRows = sh.getMaxRows();
+      maxCols = sh.getMaxColumns();
+    }
+
+    // basic clamp: at least within [1..]
+    nc1 = Math.max(1, nc1);
+    nr1 = Math.max(1, nr1);
+    nc2 = Math.max(1, nc2);
+    nr2 = Math.max(1, nr2);
+
+    // clamp to max if requested
+    nc1 = Math.min(nc1, maxCols);
+    nc2 = Math.min(nc2, maxCols);
+    nr1 = Math.min(nr1, maxRows);
+    nr2 = Math.min(nr2, maxRows);
+
+    // ensure non-empty (if inverted due to aggressive negative deltas, pin to 1x1 at the nearest corner)
+    if (nc1 > nc2) nc2 = nc1;
+    if (nr1 > nr2) nr2 = nr1;
+
+    const start = indexToLetters(nc1) + nr1;
+    const end   = indexToLetters(nc2) + nr2;
+    const body  = (nc1 === nc2 && nr1 === nr2) ? start : (start + ":" + end);
+
+    return (sheetName ? quoteSheetName(sheetName) + "!" : "") + body;
+  }
+
+  /** * Build A1 text from an event range; e.g. 'Sheet'!$C$5:$F$12 * @param {{range: GoogleAppsScript.Spreadsheet.Range}} e * @return {string} */ 
+  function a1FromEvent(e) { if (!e || !e.range) throw new Error("Missing event or e.range"); return a1FromRange(e.range); }
+
   return {
+    ensureSheetOnA1,
     quoteSheetName, 
     peelSheet, 
     splitA1, 
@@ -213,6 +310,8 @@ var GSRange = (function () {
     a1FromRange,
     getDisplayArray,
     getValuesArrayWithImageRefs,
-    isRangeLike
+    isRangeLike,
+    a1FromEvent,
+    extendA1
   };
 })();

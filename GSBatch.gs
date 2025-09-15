@@ -31,12 +31,13 @@ var GSBatch = (function () {
 
   /* ---------- Values (single cell + ranges) ---------- */
 
-  function addValues(batch, a1OrGridRange, values, opts = {}) {
+  function addValues(batch, a1OrGridRange, values, opts = DEFAULT_OPTS) {
+    opts = resolveOpts(opts);
     const grid = (typeof a1OrGridRange === 'string')
       ? _a1ToGridRange_(batch.ss, a1OrGridRange)
       : a1OrGridRange;
 
-    const shaped = _to2D_(values);
+    const shaped = GSUtils.Arr.to2D(values);
     const H = shaped.length, W = shaped[0]?.length || 0;
     if (!H || !W) throw new Error('values must be non-empty');
 
@@ -70,7 +71,7 @@ var GSBatch = (function () {
   }
 
   /** Single-cell write (scalar, Date, "=FORMULA", or null to clear). */
-  function addCell(batch, a1OrGridRange, value, opts = {}) {
+  function addCell(batch, a1OrGridRange, value, opts = DEFAULT_OPTS) {
     return addValues(batch, a1OrGridRange, [[value]], opts);
   }
 
@@ -153,20 +154,18 @@ var GSBatch = (function () {
    *   - render: 'display'|'raw'|'formula'  (default 'display')
    *   - dateTime: 'SERIAL_NUMBER'|'FORMATTED_STRING' (default 'SERIAL_NUMBER')
    */
-  function loadRanges(input, opts = {cfg : Configuration, logger : DEFAULT_LOGGER}) {
-    const ss = opts.batch?.ss || _resolveSpreadsheet_(opts.spreadsheet);
-    const ssId = ss.getId();
-
+  function loadRanges(input, opts = DEFAULT_OPTS) {
+    
     const valueRenderOption = _renderModeToVRO_(opts.render || 'display');
     const dateTimeRenderOption = opts.dateTime || 'SERIAL_NUMBER';
 
-    const norm = _normalizeInputForBatchLoad_(input, ss);
+    const norm = _normalizeInputForBatchLoad_(input, opts.ss);
     if (!norm.items.length) return Array.isArray(input) ? [] : JSON.parse(JSON.stringify(input || {}));
 
-    const ranges = norm.items.map(it => _ensureSheetOnA1_(it.range, ss));
+    const ranges = norm.items.map(it => GSRange.ensureSheetOnA1(it.range, opts.ss));
     opts.logger.trace("Loading Ranges " + JSON.stringify(ranges));
 
-    const res = Sheets.Spreadsheets.Values.batchGet(ssId, {
+    const res = Sheets.Spreadsheets.Values.batchGet(opts.ssid, {
       ranges,
       valueRenderOption,
       dateTimeRenderOption
@@ -209,7 +208,7 @@ var GSBatch = (function () {
     if (typeof v === 'boolean') { out.userEnteredValue = { boolValue: v }; return out; }
     if (typeof v === 'number' && Number.isFinite(v)) { out.userEnteredValue = { numberValue: v }; return out; }
     if (v instanceof Date) {
-      const serial = _dateToSerial_(v);
+      const serial = GSUtils.Date.dateToSerial(v);
       out.userEnteredValue = { numberValue: serial };
       out.userEnteredFormat = { numberFormat: { type: 'DATE_TIME', pattern: dateTimePattern || 'yyyy-mm-dd hh:mm:ss' } };
       return out;
@@ -218,13 +217,8 @@ var GSBatch = (function () {
     return out;
   }
 
-  function _dateToSerial_(d) {
-    const MS_PER_DAY = 24 * 60 * 60 * 1000;
-    return d.getTime() / MS_PER_DAY + 25569; // 1899-12-30 epoch
-  }
-
   function _a1ToGridRange_(ss, a1) {
-    const { sheetName, addrOnly } = _splitA1_(a1);
+    const { sheetName, addrOnly } = GSRange.splitA1(a1);
     const sh = sheetName ? ss.getSheetByName(sheetName) : ss.getActiveSheet();
     if (!sh) throw new Error('Sheet not found: ' + sheetName);
     const sheetId = sh.getSheetId();
@@ -254,25 +248,11 @@ var GSBatch = (function () {
     throw new Error('Range must be a finite rectangle or single cell: ' + a1);
   }
 
-  function _splitA1_(s) {
-    s = String(s).trim();
-    const i = s.lastIndexOf('!');
-    if (i < 0) return { sheetName: null, addrOnly: s };
-    let raw = s.slice(0, i);
-    if (raw.startsWith("'") && raw.endsWith("'")) raw = raw.slice(1, -1).replace(/''/g, "'");
-    return { sheetName: raw, addrOnly: s.slice(i + 1) };
-  }
 
   function _colToIndex_(letters) {
     let n = 0;
     for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
     return n;
-  }
-
-  function _to2D_(v) {
-    if (Array.isArray(v) && Array.isArray(v[0])) return v;
-    if (Array.isArray(v)) return [v];
-    return [[v]];
   }
 
   function _ensureSheet_(ss, nameOrId) {
@@ -321,21 +301,10 @@ var GSBatch = (function () {
     throw new Error("loadRanges expects an Array or an Object with .range properties.");
   }
 
-  function _ensureSheetOnA1_(a1, ss) {
-    const { sheetName, addrOnly } = _splitA1_(a1);
-    if (sheetName) return a1;
-    const shName = ss.getActiveSheet().getName();
-    return _quoteIfNeeded_(shName) + "!" + addrOnly;
-  }
-
-  function _quoteIfNeeded_(name) {
-    return /\s/.test(name) ? "'" + String(name).replace(/'/g, "''") + "'" : name;
-  }
-
   /* Expose */
   return {
     /** create/compose/commit (writes) */
-    new: newBatch,
+    newBatch,
     merge,
     commit,
 

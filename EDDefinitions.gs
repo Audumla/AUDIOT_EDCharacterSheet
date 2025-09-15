@@ -9,23 +9,23 @@ var EDDefs = (function () {
     unpack : 3,
   };
 
-  // ------- private helpers -------
-  function toBoolFlag(v) { return v === true || v === 1 || v === "1"; }
-  function byteLen(str)  { return Utilities.newBlob(str).getBytes().length; }
-
-
-  function loadDefinitions(defs, loadNonCached = false, useCache = false, opts) {
+  function loadDefinitions(defs, loadNonCached = false, useCache = false, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { cfg, logger } = opts;
 
     const filtered = (defs || []).filter(row =>
       row?.[DEFINITION_INDEX.range] && String(row[DEFINITION_INDEX.range]).length > 0 &&
-      (toBoolFlag(row[DEFINITION_INDEX.cache]) || loadNonCached)
+      (GSUtils.Str.toBool(row[DEFINITION_INDEX.cache]) || loadNonCached)
+    );
+
+    const rangeOnly = (defs || []).filter(row =>
+      row?.[DEFINITION_INDEX.range] && String(row[DEFINITION_INDEX.range]).length > 0 &&
+      (!GSUtils.Str.toBool(row[DEFINITION_INDEX.cache]) && !loadNonCached)
     );
 
     const loadDefs = useCache
       ? filtered.filter(def =>
-          !toBoolFlag(def?.[DEFINITION_INDEX.cache]) ||
+          !GSUtils.Str.toBool(def?.[DEFINITION_INDEX.cache]) ||
           getCachedData(def?.[DEFINITION_INDEX.name], opts) === undefined
         )
       : filtered;
@@ -33,19 +33,28 @@ var EDDefs = (function () {
     let count = 0;
     if (loadDefs.length > 0) {
       logger.trace("Loading Definitions " + JSON.stringify(loadDefs));
-      const loadedDefinitions = GSBatch.load.ranges(loadDefs, { ...opts }); // keep all opts
+      const loadedDefinitions = GSBatch.load.ranges(loadDefs, opts); // keep all opts
 
       for (let i = 0; i < loadedDefinitions.length; i++) {
         const definition = loadedDefinitions[i];          // { name, range, values, ... }
         const src = loadDefs[i];                          // original row definition
 
         cfg[definition.name] = { ...definition };
-        cfg[definition.name].unpack = toBoolFlag(src?.[DEFINITION_INDEX.unpack]);
+        cfg[definition.name].unpack = GSUtils.Str.toBool(src?.[DEFINITION_INDEX.unpack]);
 
-        if (toBoolFlag(src?.[DEFINITION_INDEX.cache])) {
+        if (GSUtils.Str.toBool(src?.[DEFINITION_INDEX.cache])) {
           setCacheData(cfg[definition.name], opts);
         }
         count++;
+      }
+    }
+
+    if (rangeOnly.length > 0) {
+      logger.trace("Adding Definitions " + JSON.stringify(rangeOnly));
+      for (definition of rangeOnly) {
+        cfg[definition[DEFINITION_INDEX.name]] = { 
+          range : definition[DEFINITION_INDEX.range]
+        };        
       }
     }
 
@@ -54,7 +63,7 @@ var EDDefs = (function () {
       const name = def?.[DEFINITION_INDEX.name];
       const node = name ? cfg[name] : undefined;
       if (node?.unpack && node?.values) {
-        unpackProperties(cfg, node.values, logger);
+        EDProperties.unpackProperties(cfg, node.values, opts);
         logger.debug(`Unpacked Properties [${node.name}]`);
       }
     }
@@ -62,7 +71,7 @@ var EDDefs = (function () {
     return count;
   }
 
-  function initializeDefinitions(loadNonCached = false, useCache = false, opts) {
+  function initializeDefinitions(loadNonCached = false, useCache = false, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { cfg, logger } = opts;
 
@@ -85,7 +94,7 @@ var EDDefs = (function () {
     }
   }
 
-  function checkCachedDataChanged(range, opts) {
+  function checkCachedDataChanged(range, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { cfg, logger } = opts;
 
@@ -107,12 +116,12 @@ var EDDefs = (function () {
     }
   }
 
-  function setCacheData(definition, opts) {
+  function setCacheData(definition, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { logger } = opts;
 
     const obj   = JSON.stringify(definition);
-    const bytes = byteLen(obj);
+    const bytes = GSUtils.Str.byteLen(obj);
 
     if (bytes > 9000) {
       logger.error(`Cache payload too large for [${definition.name}] (${bytes} bytes). Skipping cache write.`);
@@ -123,7 +132,7 @@ var EDDefs = (function () {
     logger.debug(`Stored Cache Data [${definition.name}:${definition.range}] (${bytes} bytes)`);
   }
 
-  function clearCacheData(name, opts) {
+  function clearCacheData(name, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { cfg, logger } = opts;
 
@@ -134,7 +143,7 @@ var EDDefs = (function () {
     }
   }
 
-  function getCachedData(name, opts) {
+  function getCachedData(name, opts = DEFAULT_OPTS) {
     opts = resolveOpts(opts);
     const { cfg, logger } = opts;
 

@@ -76,9 +76,11 @@ var GSUtils = (function () {
 
   function toBool(x) {
     if (typeof x === "boolean") return x;
+    if (x == null) return false;      // <- explicit null/undefined as false
     const s = String(x).trim().toLowerCase();
     return !(s === "false" || s === "0" || s === "");
   }
+
 
   function isPlainObject(o) {
     return o != null && typeof o === "object" && !Array.isArray(o);
@@ -142,10 +144,22 @@ var GSUtils = (function () {
     return true;
   }
 
+  function dateToSerial(d) {
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    return d.getTime() / MS_PER_DAY + 25569; // 1899-12-30 epoch
+  }
+
+  function formatDate(d, tz, format = "yyyy-MM-dd'T'HH:mm:ss") {
+    return Utilities.formatDate(d, tz || Session.getScriptTimeZone() || 'UTC', format);
+  }
+
+
+  function byteLen(str)  { return Utilities.newBlob(str).getBytes().length; }
 
   return {
-    Obj: { deepCloneSimple, deepEqualSimple, isPlainObject },
-    Arr: { to2D, flatten, findRowByColumn, findRowsByColumn },
-    Str: { toBool, coerce, safePropName  },
+    Obj:  { deepCloneSimple, deepEqualSimple, isPlainObject, safePropName },
+    Arr:  { to2D, flatten, findRowByColumn, findRowsByColumn },
+    Str:  { toBool, coerce, byteLen },
+    Date: { dateToSerial, formatDate }
   };
 })();

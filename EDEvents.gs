@@ -2,12 +2,11 @@ const SELECTED_TYPE = "SELECTED";
 const CHECK_TYPE = "CHECK";
 
 class CellEvent {
-  constructor(cell,opts) {
+  constructor(cell) {
     this._cell = cell;
-    resolveOpts(this,opts);
   }
 
-  isCellMonitored() {
+  isCellMonitored(opts = DEFAULT_OPTS) {
     const row = GSUtils.Arr.findRowByColumn(this.cfg.EVENT_DEFINITIONS.values,2,this._cell);
     var mon = undefined
     if (row != undefined) {
@@ -23,12 +22,12 @@ class CellEvent {
 
 class CellEditedEvent extends CellEvent {
   
-  constructor(cell,opts) {
-    super(cell,opts);
+  constructor(cell) {
+    super(cell);
   }
 
-  fireEvent() {
-    this.logger.trace(`Cell Edited [${this._cell}]`);
+  fireEvent(opts = DEFAULT_OPTS) {
+    opts.logger.trace(`Cell Edited [${this._cell}]`);
     if (!EDDefs.checkCachedDataChanged(this._cell,this)) {
       EDDefs.initializeDefinitions(false,true,this);
       const mon = this.isCellMonitored();
@@ -39,7 +38,7 @@ class CellEditedEvent extends CellEvent {
 
       }
       else {
-        this.logger.trace(`Cell not Monitored [${this._cell}]`);
+        opts.logger.trace(`Cell not Monitored [${this._cell}]`);
       }
 
     }

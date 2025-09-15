@@ -26,14 +26,13 @@ var EDProperties = (function () {
    * @param {{track?: boolean}} [opts]
    * @returns {Object}
    */
-  function unpackProperties(target, rows, logger, opts) {
-    logger = logger || (typeof DEFAULT_LOGGER !== 'undefined' ? DEFAULT_LOGGER : null);
-    opts = opts || {};
-
+  function unpackProperties(target, rows, opts = DEFAULT_OPTS) {
+    opts = resolveOpts(opts);
+    
     if (!target || typeof target !== 'object') throw new Error('target must be an object');
     if (!Array.isArray(rows)) throw new Error('rows must be a 2D array like [[name, ...], ...]');
 
-    logger && logger.trace && logger.trace("Unpacking " + JSON.stringify(rows));
+    opts.logger.trace("Unpacking " + JSON.stringify(rows));
 
     const track = !!opts.track;
     const createdPaths = []; // leaf paths we set during this call
@@ -52,7 +51,7 @@ var EDProperties = (function () {
       if (!partsRaw.length) continue;
 
       // Normalize path segments
-      const parts = partsRaw.map(GSUtil.Str.safePropName);
+      const parts = partsRaw.map(GSUtils.Obj.safePropName);
 
       // Walk/create intermediate nodes
       let node = target;
@@ -73,16 +72,16 @@ var EDProperties = (function () {
       if (row.length >= 4) {
         node[leafKey] = {
           property: name,                             // keep the full path string verbatim
-          propertyMask: GSUtil.Val.coerce(row[1]),
-          value:        GSUtil.Val.coerce(row[2]),
-          valueMask:    GSUtil.Val.coerce(row[3]),
+          propertyMask: GSUtils.Str.coerce(row[1]),
+          value:        GSUtils.Str.coerce(row[2]),
+          valueMask:    GSUtils.Str.coerce(row[3]),
         };
         if (track) createdPaths.push(name);
         continue;
       }
 
       // 2-column simple value
-      const simpleValue = GSUtil.Val.coerce(row.length > 1 ? row[1] : null);
+      const simpleValue = GSUtils.Str.coerce(row.length > 1 ? row[1] : null);
       node[leafKey] = simpleValue; // overwrite
       if (track) createdPaths.push(name);
     }
@@ -101,7 +100,7 @@ var EDProperties = (function () {
     }
     // Add paths and snapshot their current values
     for (const p of paths) tr.paths.add(p);
-    for (const p of paths) tr.baseline.set(p, GSUtil.Obj.deepCloneSimple(GSUtil.Path.getAtPath(root, p, { sep: '|', transform: GSUtil.Str.safePropName })));
+    for (const p of paths) tr.baseline.set(p, GSUtils.Obj.deepCloneSimple(getAtPath(root, p, { sep: '|', transform: safePropName })));
   }
 
   /** Returns true if any tracked leaf has changed from its baseline. */
@@ -109,8 +108,8 @@ var EDProperties = (function () {
     const tr = root && root[__TRACK__KEY];
     if (!tr) return false;
     for (const p of tr.paths) {
-      if (!GSUtil.Obj.deepEqualSimple(tr.baseline.get(p),
-        GSUtil.Path.getAtPath(root, p, { sep: '|', transform: GSUtil.Str.safePropName }))) {
+      if (!GSUtils.Obj.deepEqualSimple(tr.baseline.get(p),
+        getAtPath(root, p, { sep: '|', transform: safePropName }))) {
         return true;
       }
     }
@@ -127,8 +126,8 @@ var EDProperties = (function () {
     const out = [];
     for (const p of tr.paths) {
       const before = tr.baseline.get(p);
-      const after  = GSUtil.Path.getAtPath(root, p, { sep: '|', transform: GSUtil.Str.safePropName });
-      if (!GSUtil.Obj.deepEqualSimple(before, after)) out.push({ property: p, before, after });
+      const after  = getAtPath(root, p, { sep: '|', transform: safePropName });
+      if (!GSUtils.Obj.deepEqualSimple(before, after)) out.push({ property: p, before, after });
     }
     return out;
   }
@@ -138,7 +137,7 @@ var EDProperties = (function () {
     const tr = root && root[__TRACK__KEY];
     if (!tr) return;
     for (const p of tr.paths) {
-      tr.baseline.set(p, GSUtil.Obj.deepCloneSimple(GSUtil.Path.getAtPath(root, p, { sep: '|', transform: GSUtil.Str.safePropName })));
+      tr.baseline.set(p, GSUtils.Obj.deepCloneSimple(getAtPath(root, p, { sep: '|', transform: safePropName })));
     }
   }
 
@@ -154,8 +153,8 @@ var EDProperties = (function () {
    * Get a value from object using a separator-delimited path.
    * By default uses '|' separator and `safePropName` segment transform.
    */
-  function getAtPath(obj, path, opts) {
-    opts = opts || {};
+  function getAtPath(obj, path, opts = DEFAULT_OPTS) {
+    opts = resolveOpts(opts);
     const sep = opts.sep || '|';
     const xform = opts.transform || safePropName;
 
