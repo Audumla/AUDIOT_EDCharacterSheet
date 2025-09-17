@@ -9,9 +9,9 @@ var EDDefs = (function () {
     unpack : 3,
   };
 
-  function loadDefinitions(defs, loadNonCached = false, useCache = false, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { cfg, logger } = opts;
+  function loadDefinitions(defs, loadNonCached = false, useCache = false) {
+
+    const cfg = EDContext.context.cfg;
 
     const filtered = (defs || []).filter(row =>
       row?.[DEFINITION_INDEX.range] && String(row[DEFINITION_INDEX.range]).length > 0 &&
@@ -26,14 +26,14 @@ var EDDefs = (function () {
     const loadDefs = useCache
       ? filtered.filter(def =>
           !GSUtils.Str.toBool(def?.[DEFINITION_INDEX.cache]) ||
-          getCachedData(def?.[DEFINITION_INDEX.name], opts) === undefined
+          getCachedData(def?.[DEFINITION_INDEX.name]) === undefined
         )
       : filtered;
 
     let count = 0;
     if (loadDefs.length > 0) {
-      logger.trace("Loading Definitions " + JSON.stringify(loadDefs));
-      const loadedDefinitions = GSBatch.load.ranges(loadDefs, opts); // keep all opts
+      EDLogger.trace("Loading Definitions " + JSON.stringify(loadDefs));
+      const loadedDefinitions = GSBatch.load.ranges(loadDefs); 
 
       for (let i = 0; i < loadedDefinitions.length; i++) {
         const definition = loadedDefinitions[i];          // { name, range, values, ... }
@@ -43,14 +43,14 @@ var EDDefs = (function () {
         cfg[definition.name].unpack = GSUtils.Str.toBool(src?.[DEFINITION_INDEX.unpack]);
 
         if (GSUtils.Str.toBool(src?.[DEFINITION_INDEX.cache])) {
-          setCacheData(cfg[definition.name], opts);
+          setCacheData(cfg[definition.name]);
         }
         count++;
       }
     }
 
     if (rangeOnly.length > 0) {
-      logger.trace("Adding Definitions " + JSON.stringify(rangeOnly));
+      EDLogger.trace("Adding Definitions " + JSON.stringify(rangeOnly));
       for (definition of rangeOnly) {
         cfg[definition[DEFINITION_INDEX.name]] = { 
           range : definition[DEFINITION_INDEX.range]
@@ -63,89 +63,87 @@ var EDDefs = (function () {
       const name = def?.[DEFINITION_INDEX.name];
       const node = name ? cfg[name] : undefined;
       if (node?.unpack && node?.values) {
-        EDProperties.unpackProperties(cfg, node.values, opts);
-        logger.debug(`Unpacked Properties [${node.name}]`);
+        EDProperties.unpackProperties(EDContext.context, node.values);
+        EDLogger.debug(`Unpacked Properties [${node.name}]`);
       }
     }
 
     return count;
   }
 
-  function initializeDefinitions(loadNonCached = false, useCache = false, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { cfg, logger } = opts;
+  function initializeDefinitions(loadNonCached = false, useCache = false,) {
+    
+    const cfg = EDContext.context.cfg;
 
-    logger.info("Initializing Definition Tables");
+    EDLogger.info("Initializing Definition Tables");
 
     if (!useCache && cfg?.DEFINITION_RANGES?.name) {
-      clearCacheData(cfg.DEFINITION_RANGES.name, opts);
+      clearCacheData(cfg.DEFINITION_RANGES.name);
     }
 
     if (cfg?.DEFINITION_RANGES?.name) {
-      getCachedData(cfg.DEFINITION_RANGES.name, opts);
+      getCachedData(cfg.DEFINITION_RANGES.name);
     }
 
     const rows = cfg?.DEFINITION_RANGES?.values || [];
     if (rows.length === 1) {
-      loadDefinitions(rows, loadNonCached, useCache, opts);
+      loadDefinitions(rows, loadNonCached, useCache);
     }
     if (rows.length > 1) {
-      loadDefinitions(rows.slice(1), loadNonCached, useCache, opts);
+      loadDefinitions(rows.slice(1), loadNonCached, useCache);
     }
   }
 
-  function checkCachedDataChanged(range, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { cfg, logger } = opts;
+  function checkCachedDataChanged(range) {
+    const cfg = EDContext.context.cfg;
 
     if (cfg?.DEFINITION_RANGES?.name) {
-      getCachedData(cfg.DEFINITION_RANGES.name, opts);
+      getCachedData(cfg.DEFINITION_RANGES.name);
     }
 
     const defRanges = (cfg?.DEFINITION_RANGES?.values || [])
       .filter(row => row?.[DEFINITION_INDEX.range])
       .map(row => row[DEFINITION_INDEX.range]);
 
-    if (GSUtils.Arr.rangesIntersectAny(range, defRanges)) {
-      logger.debug(Utilities.formatString("Cached Data Edited [ %s ]", range));
-      initializeDefinitions(false, false, opts);
+    var changedDefs = GSRange.rangesIntersectPairs(range, defRanges)
+    if (changedDefs.length > 0) {
+//      EDLogger.debug(Utilities.formatString("Cached Data Edited [ %s ]", range));
+      initializeDefinitions(false, false);
       return true;
     } else {
-      logger.trace(Utilities.formatString("Edited Cell Not In Cache [ %s ]", range));
+//      EDLogger.info(Utilities.formatString("Edited Cell Not In Cache [ %s ]", range));
       return false;
     }
   }
 
-  function setCacheData(definition, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { logger } = opts;
+  function setCacheData(definition) {
 
     const obj   = JSON.stringify(definition);
     const bytes = GSUtils.Str.byteLen(obj);
 
     if (bytes > 9000) {
-      logger.error(`Cache payload too large for [${definition.name}] (${bytes} bytes). Skipping cache write.`);
+      EDLogger.error(`Cache payload too large for [${definition.name}] (${bytes} bytes). Skipping cache write.`);
       return;
     }
 
     ScriptValues.setProperty(definition.name, obj);
-    logger.debug(`Stored Cache Data [${definition.name}:${definition.range}] (${bytes} bytes)`);
+    EDLogger.debug(`Stored Cache Data [${definition.name}:${definition.range ? definition.range : definition.values}] (${bytes} bytes)`);
   }
 
-  function clearCacheData(name, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { cfg, logger } = opts;
+  function clearCacheData(name) {
+
+    const cfg = EDContext.context.cfg;
 
     ScriptValues.deleteProperty(name);
     if (cfg && cfg[name]) {
       cfg[name].values = undefined;
-      logger.debug(`Cleared Cached Data [${name}]`);
+      EDLogger.debug(`Cleared Cached Data [${name}]`);
     }
   }
 
-  function getCachedData(name, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
-    const { cfg, logger } = opts;
+  function getCachedData(name) {
+
+    const cfg = EDContext.context.cfg;
 
     let data = cfg ? cfg[name] : undefined;
 
@@ -155,10 +153,10 @@ var EDDefs = (function () {
         try {
           data = JSON.parse(property);
           if (cfg) cfg[name] = data;
-          logger.debug(`Found Cached Data [${name}]`);
+          EDLogger.debug(`Found Cached Data [${name}]`);
         } catch (e) {
-          clearCacheData(name, opts);
-          logger.error(`Invalid Cached Data [${name}] [ ${e.message} ]`);
+          clearCacheData(name);
+          EDLogger.error(`Invalid Cached Data [${name}] [ ${e.message} ]`);
         }
       }
 
@@ -169,7 +167,7 @@ var EDDefs = (function () {
           cfg[name].cache ? cfg[name].cache : true,
           cfg[name].unpack ? cfg[name].unpack : false,
         ];
-        loadDefinitions([row], false, false, opts);
+        loadDefinitions([row], false, false);
         data = cfg[name];
       } else if (data === undefined || data.values === undefined) {
         return undefined;
@@ -181,7 +179,7 @@ var EDDefs = (function () {
 
   // ------- public API -------
   return {
-    resolveOpts,
+
     loadDefinitions,
     initializeDefinitions,
     checkCachedDataChanged,

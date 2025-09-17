@@ -92,7 +92,7 @@ var GSUtils = (function () {
   function safePropName(s) {
     if (s == null) return s;
     const t = String(s);
-    return (t.charAt(0).toLowerCase() + t.slice(1)).replace(/ /g, "_");
+    return (t.charAt(0).toLowerCase() + t.slice(1)).replace(/ /g, "");
   }
 
   // -------- Value helpers --------
@@ -149,8 +149,8 @@ var GSUtils = (function () {
     return d.getTime() / MS_PER_DAY + 25569; // 1899-12-30 epoch
   }
 
-  function formatDate(d, tz, format = "yyyy-MM-dd'T'HH:mm:ss") {
-    return Utilities.formatDate(d, tz || Session.getScriptTimeZone() || 'UTC', format);
+  function formatDate(d ) {
+    return Utilities.formatDate(d, EDContext.context.tz || Session.getScriptTimeZone() || 'UTC', EDContext.context.cfg.dateFormat || "yyyy-mmm-dd hh:mm:ss");
   }
 
 

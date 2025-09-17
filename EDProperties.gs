@@ -47,7 +47,7 @@ var EDProperties = (function () {
       const name = String(nameRaw).trim();
       if (!name) continue;
 
-      const partsRaw = name.split('|').map(s => s.trim()).filter(Boolean);
+      const partsRaw = name.split(/\||\./).map(s => s.trim()).filter(Boolean);
       if (!partsRaw.length) continue;
 
       // Normalize path segments

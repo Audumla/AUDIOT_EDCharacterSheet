@@ -19,20 +19,30 @@ var GSBatch = (function () {
   }
 
   /** Commit in ONE call (all queued write requests). */
-  function commit(batch, { includeResponse = false, clearAfter = true } = {}) {
-    if (!batch || !batch.requests || !batch.requests.length) return null;
-    const res = Sheets.Spreadsheets.batchUpdate({
-      requests: batch.requests,
-      includeSpreadsheetInResponse: !!includeResponse
-    }, batch.spreadsheetId);
-    if (clearAfter) batch.requests.length = 0;
-    return res;
+  function commit(opts = {}) {
+    const { includeResponse =  false, clearAfter = true } = opts;
+    const batch = EDContext.context.batch;
+    
+    if (batch && batch.requests && batch.requests.length) {
+      EDLogger.trace(`Updating sheet ${JSON.stringify(batch.requests)}`);
+      const res = Sheets.Spreadsheets.batchUpdate({
+        requests: batch.requests,
+        includeSpreadsheetInResponse: !!includeResponse
+      }, batch.spreadsheetId);
+      if (clearAfter) batch.requests.length = 0;
+      return res;
+    }
+    else {
+      return undefined;
+    }
   }
 
   /* ---------- Values (single cell + ranges) ---------- */
 
-  function addValues(batch, a1OrGridRange, values, opts = DEFAULT_OPTS) {
-    opts = resolveOpts(opts);
+  function addValues(batch, a1OrGridRange, values, opts = {}) {
+
+    const {allowMismatch = false,autoSize = true} = opts;
+
     const grid = (typeof a1OrGridRange === 'string')
       ? _a1ToGridRange_(batch.ss, a1OrGridRange)
       : a1OrGridRange;
@@ -41,25 +51,22 @@ var GSBatch = (function () {
     const H = shaped.length, W = shaped[0]?.length || 0;
     if (!H || !W) throw new Error('values must be non-empty');
 
-    if (_isSingleCellGrid_(grid)) {
-      if (opts.autoSize !== false && (H > 1 || W > 1)) {
-        grid.endRowIndex    = grid.startRowIndex    + H;
-        grid.endColumnIndex = grid.startColumnIndex + W;
-      } else if (H !== 1 || W !== 1) {
-        throw new Error('A1 is a single cell but values are not 1x1. Pass {autoSize:true}.');
-      }
+    if (autoSize) {
+      grid.endRowIndex    = grid.startRowIndex    + H;
+      grid.endColumnIndex = grid.startColumnIndex + W;
+      
     } else {
       const RH = grid.endRowIndex - grid.startRowIndex;
       const RW = grid.endColumnIndex - grid.startColumnIndex;
-      if ((H !== RH || W !== RW) && !opts.allowMismatch) {
-        throw new Error(`Values size ${H}x${W} does not match range ${RH}x${RW}. Set allowMismatch:true to write upper-left block.`);
+      if ((H !== RH || W !== RW) && !allowMismatch) {
+        throw new Error(`Values size ${H}x${W} does not match range ${RH}x${RW} (${grid}). Set allowMismatch:true to write upper-left block.`);
       }
     }
 
     let needsNumFmt = false;
     const rows = shaped.map(r => ({
       values: r.map(v => {
-        const cd = _jsToCellData_(v, { dateTimePattern: opts.dateTimePattern });
+        const cd = _jsToCellData_(v, opts);
         if (cd.userEnteredFormat && cd.userEnteredFormat.numberFormat) needsNumFmt = true;
         return cd;
       })
@@ -71,7 +78,7 @@ var GSBatch = (function () {
   }
 
   /** Single-cell write (scalar, Date, "=FORMULA", or null to clear). */
-  function addCell(batch, a1OrGridRange, value, opts = DEFAULT_OPTS) {
+  function addCell(batch, a1OrGridRange, value, opts) {
     return addValues(batch, a1OrGridRange, [[value]], opts);
   }
 
@@ -149,23 +156,23 @@ var GSBatch = (function () {
    *    → returns a cloned object with same props, each prop → { range, values, ... }
    *
    * OPTS:
-   *   - spreadsheet: Spreadsheet object (defaults to batch.ss if opts.batch given, else active)
-   *   - batch: pass an existing GSBatch batch to reuse its spreadsheet
    *   - render: 'display'|'raw'|'formula'  (default 'display')
    *   - dateTime: 'SERIAL_NUMBER'|'FORMATTED_STRING' (default 'SERIAL_NUMBER')
+   *   - trim: Remove any rows that have an empty first column from the return values
    */
-  function loadRanges(input, opts = DEFAULT_OPTS) {
-    
+  function loadRanges(input, opts = {}) {
+
+    const { trim = true } = opts;
     const valueRenderOption = _renderModeToVRO_(opts.render || 'display');
     const dateTimeRenderOption = opts.dateTime || 'SERIAL_NUMBER';
 
-    const norm = _normalizeInputForBatchLoad_(input, opts.ss);
+    const norm = _normalizeInputForBatchLoad_(input, EDContext.context.ss);
     if (!norm.items.length) return Array.isArray(input) ? [] : JSON.parse(JSON.stringify(input || {}));
 
-    const ranges = norm.items.map(it => GSRange.ensureSheetOnA1(it.range, opts.ss));
-    opts.logger.trace("Loading Ranges " + JSON.stringify(ranges));
+    const ranges = norm.items.map(it => GSRange.ensureSheetOnA1(it.range, EDContext.context.ss));
+    EDLogger.trace("Loading Ranges " + JSON.stringify(ranges));
 
-    const res = Sheets.Spreadsheets.Values.batchGet(opts.ssid, {
+    const res = Sheets.Spreadsheets.Values.batchGet(EDContext.context.ssid, {
       ranges,
       valueRenderOption,
       dateTimeRenderOption
@@ -173,8 +180,10 @@ var GSBatch = (function () {
     const valueRanges = (res && res.valueRanges) || [];
 
     const withResults = norm.items.map((it, i) => {
+
       const vr = valueRanges[i] || {};
-      return { name: it.name, range: vr.range || ranges[i], values: vr.values || [], _idx: it._idx };
+      const fValues = trim ? vr.values.filter(r => r[0] && r[0].length > 0) : vr.values;
+      return { name: it.name, range: vr.range || ranges[i], values: fValues || [], _idx: it._idx };
     });
 
     if (norm.kind === 'array') {
@@ -201,7 +210,7 @@ var GSBatch = (function () {
     return (g.endRowIndex - g.startRowIndex === 1) && (g.endColumnIndex - g.startColumnIndex === 1);
   }
 
-  function _jsToCellData_(v, { dateTimePattern } = {}) {
+  function _jsToCellData_(v, { dtfmt } = {}) {
     const out = { userEnteredValue: null };
     if (v == null) { out.userEnteredValue = null; return out; }
     if (typeof v === 'string' && v.length && v[0] === '=') { out.userEnteredValue = { formulaValue: v }; return out; }
@@ -210,7 +219,7 @@ var GSBatch = (function () {
     if (v instanceof Date) {
       const serial = GSUtils.Date.dateToSerial(v);
       out.userEnteredValue = { numberValue: serial };
-      out.userEnteredFormat = { numberFormat: { type: 'DATE_TIME', pattern: dateTimePattern || 'yyyy-mm-dd hh:mm:ss' } };
+      out.userEnteredFormat = { numberFormat: { type: 'DATE_TIME', pattern: dtfmt || 'yyyy-mm-dd hh:mm:ss' } };
       return out;
     }
     out.userEnteredValue = { stringValue: String(v) };
@@ -301,6 +310,82 @@ var GSBatch = (function () {
     throw new Error("loadRanges expects an Array or an Object with .range properties.");
   }
 
+/* ---------- Deletes (same semantics as Sheets) ---------- */
+
+/**
+ * Delete N whole rows starting at startRow (0-based).
+ * @param {*} batch
+ * @param {number} startRow 0-based start row index
+ * @param {number} nRows    number of rows to delete
+ * @param {{sheet?: string|number}} [opts] pass a sheet name or ID; default = active sheet
+ */
+function deleteRows(batch, startRow, nRows, opts = {}) {
+  const { sheetId } = _ensureSheet_(batch.ss, opts.sheet ?? batch.ss.getActiveSheet().getName());
+  batch.requests.push({
+    deleteDimension: {
+      range: { sheetId, dimension: 'ROWS', startIndex: startRow, endIndex: startRow + nRows }
+    }
+  });
+  return batch;
+}
+
+/**
+ * Delete N whole columns starting at startCol (0-based).
+ * @param {*} batch
+ * @param {number} startCol 0-based start column index
+ * @param {number} nCols    number of columns to delete
+ * @param {{sheet?: string|number}} [opts]
+ */
+function deleteColumns(batch, startCol, nCols, opts = {}) {
+  const { sheetId } = _ensureSheet_(batch.ss, opts.sheet ?? batch.ss.getActiveSheet().getName());
+  batch.requests.push({
+    deleteDimension: {
+      range: { sheetId, dimension: 'COLUMNS', startIndex: startCol, endIndex: startCol + nCols }
+    }
+  });
+  return batch;
+}
+
+/**
+ * Delete a rectangular range (shifts cells to fill). Use shiftDimension:
+ *  - 'ROWS'    → shift cells up
+ *  - 'COLUMNS' → shift cells left
+ * @param {*} batch
+ * @param {string|Object} a1OrGridRange e.g. "Sheet!B3:D7" or a GridRange
+ * @param {'ROWS'|'COLUMNS'} shiftDimension
+ */
+function deleteRange(batch, a1OrGridRange, shiftDimension) {
+  const grid = (typeof a1OrGridRange === 'string')
+    ? _a1ToGridRange_(batch.ss, a1OrGridRange)
+    : a1OrGridRange;
+  batch.requests.push({ deleteRange: { range: grid, shiftDimension } });
+  return batch;
+}
+
+/**
+ * Delete whole rows referenced by an A1 row range, e.g. "Sheet!3:7" or "3:3".
+ * (Convenience wrapper around deleteRows.)
+ */
+function deleteRowsA1(batch, a1RowRange) {
+  const { sheetName, addrOnly } = GSRange.splitA1(a1RowRange);
+  const ss = batch.ss;
+  const sh = sheetName ? ss.getSheetByName(sheetName) : ss.getActiveSheet();
+  if (!sh) throw new Error('Sheet not found: ' + sheetName);
+  const sheetId = sh.getSheetId();
+
+  const m = /^(\d+):(\d+)$/.exec(String(addrOnly).trim());
+  if (!m) throw new Error('Expected a row range like "3:7"');
+  const r1 = Math.min(+m[1], +m[2]) - 1;     // 0-based
+  const r2 = Math.max(+m[1], +m[2]);         // exclusive end in API terms
+
+  batch.requests.push({
+    deleteDimension: {
+      range: { sheetId, dimension: 'ROWS', startIndex: r1, endIndex: r2 }
+    }
+  });
+  return batch;
+}
+
   /* Expose */
   return {
     /** create/compose/commit (writes) */
@@ -321,6 +406,14 @@ var GSBatch = (function () {
       rows: insertRows,
       columns: insertColumns,
       range: insertRange
+    },
+    
+    /** remove ops */
+    remove: { 
+      rows: deleteRows, 
+      columns: deleteColumns, 
+      range: deleteRange, 
+      rowsA1: deleteRowsA1 
     },
 
     /** reads */
