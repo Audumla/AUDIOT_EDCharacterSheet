@@ -14,16 +14,22 @@ var EDContext = (function () {
     DEFINITION_RANGES : {
       range  : "References!$A2:$D20",
       name   : "DEFINITION_RANGES",
+      unpack : EDProperties.path.UNPACK.array,
       values : undefined
     },
 
-    EVENT_DEFINITIONS : undefined
+    EVENT_DEFINITIONS : {},
+    SETTINGS : {
+      values : undefined
+    },
+    EVENT_PROPERTIES : {},
+    CHARACTER_PROPERTIES : {}
 
   }
 
   const context = {
-    status : STATUS.UNINITIALIZED,
-    cfg : undefined,
+
+    cfg : EDConfiguration,
     logger  : undefined,
 
     // spreadsheet context
@@ -38,7 +44,12 @@ var EDContext = (function () {
     status : undefined,
 
     // timing
-    startTime : undefined
+    startTime : undefined,
+
+    event : {
+      activeID : 0,
+      status : STATUS.UNINITIALIZED
+    }
   }
 
   /**

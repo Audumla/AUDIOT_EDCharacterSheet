@@ -5,34 +5,21 @@ function resolveOpts(opts = {}, dOpts = EDContext.context) {
   return EDContext.context;
 }
 
-
-function triggerEvent(event) {
-  DEFAULT_OPTS = EDContext.initializeContext();
-  const ctx = EDContext.context;
-  try {
-    event.openEvent(ctx);
-    ctx.status = event.fireEvent(ctx);
-    
-  } catch(e) {
-    ctx.status = EDContext.STATUS.FAILED;
-    ctx.logger.error(e.stack);
-  } finally {
-    event.closeEvent(ctx);
-  }
-
-}
-
 /**
  * The event handler triggered when opening the spreadsheet.
  * @param {Event} e The onOpen event.
  * @see https://developers.google.com/apps-script/guides/triggers#onopen
  */
 function onOpenTriggered(e) {
-    triggerEvent(new SheetOpenedEvent());
+  GSPerf.start();
+  GSPerf.monitor(new SheetOpenedEvent()).trigger();
+  GSPerf.stop();
 }
 
 function onEditTriggered(e) {
-  triggerEvent(new CellEditedEvent(GSRange.a1FromEvent(e)));
+  GSPerf.start();
+  GSPerf.monitor(new CellEditedEvent(GSRange.a1FromEvent(e))).trigger();
+  GSPerf.stop();
 }
   
 
@@ -70,6 +57,6 @@ function onSelectionChange__(e) {
 }
 
 function onChange(e) {
-   
+  
 
 }

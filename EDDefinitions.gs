@@ -1,6 +1,6 @@
 var EDDefs = (function () {
   // ------- private constants / services -------
-  const ScriptValues = PropertiesService.getUserProperties();
+  const cacheValues = PropertiesService.getScriptProperties();
 
   const DEFINITION_INDEX = {
     name   : 0,
@@ -10,7 +10,6 @@ var EDDefs = (function () {
   };
 
   function loadDefinitions(defs, loadNonCached = false, useCache = false) {
-
     const cfg = EDContext.context.cfg;
 
     const filtered = (defs || []).filter(row =>
@@ -26,7 +25,7 @@ var EDDefs = (function () {
     const loadDefs = useCache
       ? filtered.filter(def =>
           !GSUtils.Str.toBool(def?.[DEFINITION_INDEX.cache]) ||
-          getCachedData(def?.[DEFINITION_INDEX.name]) === undefined
+          EDDefs.getCachedData(def?.[DEFINITION_INDEX.name]) === undefined
         )
       : filtered;
 
@@ -40,10 +39,10 @@ var EDDefs = (function () {
         const src = loadDefs[i];                          // original row definition
 
         cfg[definition.name] = { ...definition };
-        cfg[definition.name].unpack = GSUtils.Str.toBool(src?.[DEFINITION_INDEX.unpack]);
+//        cfg[definition.name].unpack = src?.[DEFINITION_INDEX.unpack];
 
         if (GSUtils.Str.toBool(src?.[DEFINITION_INDEX.cache])) {
-          setCacheData(cfg[definition.name]);
+          EDDefs.setCacheData(cfg[definition.name]);
         }
         count++;
       }
@@ -51,20 +50,25 @@ var EDDefs = (function () {
 
     if (rangeOnly.length > 0) {
       EDLogger.trace("Adding Definitions " + JSON.stringify(rangeOnly));
-      for (definition of rangeOnly) {
-        cfg[definition[DEFINITION_INDEX.name]] = { 
-          range : definition[DEFINITION_INDEX.range]
+      for (const def of rangeOnly) {
+        cfg[def[DEFINITION_INDEX.name]] = { 
+          name  : def[DEFINITION_INDEX.name],
+          range : def[DEFINITION_INDEX.range],
+          values : undefined,
+          unpack : def[DEFINITION_INDEX.unpack],
+
         };        
       }
     }
 
     // Unpack after all loads (including cached ones present in cfg)
     for (const def of filtered) {
-      const name = def?.[DEFINITION_INDEX.name];
+      const name = def?.name || def?.[DEFINITION_INDEX.name];
+      const unpack = def?.unpack?.toLowerCase() || def?.[DEFINITION_INDEX.unpack]?.toLowerCase();
       const node = name ? cfg[name] : undefined;
-      if (node?.unpack && node?.values) {
-        EDProperties.unpackProperties(EDContext.context, node.values);
-        EDLogger.debug(`Unpacked Properties [${node.name}]`);
+      if (unpack != EDProperties.path.UNPACK.none && node?.values) {
+        EDProperties.path.unpack(EDContext.context, node.values, {mode : unpack, name : name });
+
       }
     }
 
@@ -78,19 +82,19 @@ var EDDefs = (function () {
     EDLogger.info("Initializing Definition Tables");
 
     if (!useCache && cfg?.DEFINITION_RANGES?.name) {
-      clearCacheData(cfg.DEFINITION_RANGES.name);
+      EDDefs.clearCacheData(cfg.DEFINITION_RANGES.name);
     }
 
     if (cfg?.DEFINITION_RANGES?.name) {
-      getCachedData(cfg.DEFINITION_RANGES.name);
+      EDDefs.getCachedData(cfg.DEFINITION_RANGES.name);
     }
 
     const rows = cfg?.DEFINITION_RANGES?.values || [];
     if (rows.length === 1) {
-      loadDefinitions(rows, loadNonCached, useCache);
+      EDDefs.loadDefinitions(rows, loadNonCached, useCache);
     }
     if (rows.length > 1) {
-      loadDefinitions(rows.slice(1), loadNonCached, useCache);
+      EDDefs.loadDefinitions(rows.slice(1), loadNonCached, useCache);
     }
   }
 
@@ -98,7 +102,7 @@ var EDDefs = (function () {
     const cfg = EDContext.context.cfg;
 
     if (cfg?.DEFINITION_RANGES?.name) {
-      getCachedData(cfg.DEFINITION_RANGES.name);
+      EDDefs.getCachedData(cfg.DEFINITION_RANGES.name);
     }
 
     const defRanges = (cfg?.DEFINITION_RANGES?.values || [])
@@ -108,7 +112,7 @@ var EDDefs = (function () {
     var changedDefs = GSRange.rangesIntersectPairs(range, defRanges)
     if (changedDefs.length > 0) {
 //      EDLogger.debug(Utilities.formatString("Cached Data Edited [ %s ]", range));
-      initializeDefinitions(false, false);
+      EDDefs.initializeDefinitions(false, false);
       return true;
     } else {
 //      EDLogger.info(Utilities.formatString("Edited Cell Not In Cache [ %s ]", range));
@@ -126,7 +130,7 @@ var EDDefs = (function () {
       return;
     }
 
-    ScriptValues.setProperty(definition.name, obj);
+    cacheValues.setProperty(definition.name, obj);
     EDLogger.debug(`Stored Cache Data [${definition.name}:${definition.range ? definition.range : definition.values}] (${bytes} bytes)`);
   }
 
@@ -134,7 +138,7 @@ var EDDefs = (function () {
 
     const cfg = EDContext.context.cfg;
 
-    ScriptValues.deleteProperty(name);
+    cacheValues.deleteProperty(name);
     if (cfg && cfg[name]) {
       cfg[name].values = undefined;
       EDLogger.debug(`Cleared Cached Data [${name}]`);
@@ -148,14 +152,14 @@ var EDDefs = (function () {
     let data = cfg ? cfg[name] : undefined;
 
     if (data === undefined || data.values === undefined) {
-      const property = ScriptValues.getProperty(name);
+      const property = cacheValues.getProperty(name);
       if (property != null) {
         try {
           data = JSON.parse(property);
           if (cfg) cfg[name] = data;
           EDLogger.debug(`Found Cached Data [${name}]`);
         } catch (e) {
-          clearCacheData(name);
+          EDDefs.clearCacheData(name);
           EDLogger.error(`Invalid Cached Data [${name}] [ ${e.message} ]`);
         }
       }
@@ -165,9 +169,9 @@ var EDDefs = (function () {
           cfg[name].name,
           cfg[name].range,
           cfg[name].cache ? cfg[name].cache : true,
-          cfg[name].unpack ? cfg[name].unpack : false,
+          cfg[name].unpack ? cfg[name].unpack : EDProperties.path.UNPACK.none,
         ];
-        loadDefinitions([row], false, false);
+        EDDefs.loadDefinitions([row], false, false);
         data = cfg[name];
       } else if (data === undefined || data.values === undefined) {
         return undefined;
@@ -186,5 +190,6 @@ var EDDefs = (function () {
     setCacheData,
     clearCacheData,
     getCachedData,
+    cacheValues,
   };
 })();

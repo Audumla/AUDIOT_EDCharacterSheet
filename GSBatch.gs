@@ -1,11 +1,12 @@
 /** Namespace: GSBatch */
 var GSBatch = (function () {
+  var batchID = 1;
   /* ===================== Public API ===================== */
 
   /** Create a new batch (pass Spreadsheet or ID; default active). */
   function newBatch(spreadsheet) {
     const ss = _resolveSpreadsheet_(spreadsheet);
-    return { ss, spreadsheetId: ss.getId(), requests: [] };
+    return { ss, spreadsheetId: ss.getId(), requests: [], batchID : batchID++ };
   }
 
   /** Merge another batch or raw requests into this batch. */
@@ -18,18 +19,22 @@ var GSBatch = (function () {
     return intoBatch;
   }
 
+  function size(batch) {
+      return GSUtils.Str.byteLen(JSON.stringify(batch.requests));
+  }
+
   /** Commit in ONE call (all queued write requests). */
-  function commit(opts = {}) {
+  function commit(batch,opts = {}) {
     const { includeResponse =  false, clearAfter = true } = opts;
-    const batch = EDContext.context.batch;
     
+
     if (batch && batch.requests && batch.requests.length) {
-      EDLogger.trace(`Updating sheet ${JSON.stringify(batch.requests)}`);
       const res = Sheets.Spreadsheets.batchUpdate({
         requests: batch.requests,
         includeSpreadsheetInResponse: !!includeResponse
       }, batch.spreadsheetId);
       if (clearAfter) batch.requests.length = 0;
+//      SpreadsheetApp.flush();
       return res;
     }
     else {
@@ -392,6 +397,7 @@ function deleteRowsA1(batch, a1RowRange) {
     newBatch,
     merge,
     commit,
+    size,
 
     /** value ops */
     add: {

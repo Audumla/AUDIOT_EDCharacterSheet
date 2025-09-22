@@ -1,6 +1,7 @@
 const SELECTED_TYPE = "SELECTED";
 const CHECK_TYPE = "CHECK";
-EVENT_ID = "EventID";
+EVENT_ID = "Event.ActiveID";
+EVENT_STATUS = "Event.Status";
 
 class EDEvent {
   constructor() {
@@ -8,26 +9,47 @@ class EDEvent {
   }
 
   openEvent() {
-    EDContext.context.status = EDContext.STATUS.PROCESSING;
-    EDLogger.info(`${this._name} [${EDContext.context.status.name}]`);
+    EDContext.context.event.status = EDContext.STATUS.PROCESSING;
+    EDLogger.info(`${this._name} [${EDContext.context.event.status.name}]`);
   }
 
   closeEvent() {  
-    if (EDContext.context.status != EDContext.STATUS.IGNORED) {
-      EDLogger.trace(`Incremented EventID [${EDContext.context.eventID} : ${EDContext.context.eventID+1}]`)
-      const eventIDr = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.SETTINGS.values,0,EVENT_ID);
-      eventIDr[1] = EDContext.context.eventID+1;
-      EDDefs.setCacheData(EDContext.context.cfg.SETTINGS,EDContext.context);
-      const eventIDloc = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.PROPERTY_MAPPINGS.values,0,EVENT_ID);
-      GSBatch.add.cell(EDContext.context.batch,eventIDloc[1],eventIDr[1]);
+    var batches = new Set();
+    batches.add(EDContext.context.batch);
+    try {
+      if (EDContext.context.event.status != EDContext.STATUS.IGNORED) {
+        EDLogger.trace(`Incremented EventID [${EDContext.context.event.activeID} : ${EDContext.context.event.activeID+1}]`)
+        const eventIDr = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.SETTINGS.values,0,EVENT_ID);
+        eventIDr[1] = EDContext.context.event.activeID+1;
+        EDDefs.setCacheData(EDContext.context.cfg.SETTINGS,EDContext.context);
+        const eventIDloc = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.PROPERTY_MAPPINGS.values,0,EVENT_ID);
+        GSBatch.add.cell(EDContext.context.batch,eventIDloc[1],eventIDr[1]);
+      }
+      else {
+        EDContext.context.event.activeID = 0;
+      }
+      EDLogger.info(`${this._name} [${EDContext.context.event.status.name}] [${(new Date() - EDContext.context.startTime)/1000} secs][${GSBatch.size(EDContext.context.batch)} bytes]`);
+      EDLogger.flush().forEach(b => {if (b != undefined) batches.add(b)});
     }
-    else {
-      EDContext.context.eventID = 0;
+    finally {
+      batches.forEach(b => GSBatch.commit(b));
     }
-    EDLogger.info(`${this._name} [${EDContext.context.status.name}] [${(new Date() - EDContext.context.startTime)/1000} secs]`);
-    EDLogger.flush();
-    GSBatch.commit(EDContext.context);
 
+  }
+
+  trigger() {
+    DEFAULT_OPTS = EDContext.initializeContext();
+    const ctx = EDContext.context;
+    try {
+      this.openEvent(ctx);
+      ctx.event.status = this.fireEvent(ctx);
+      
+    } catch(e) {
+      ctx.event.status = EDContext.STATUS.FAILED;
+      ctx.logger.error(e.stack);
+    } finally {
+      this.closeEvent(ctx);
+    }
   }
 }
 
@@ -58,7 +80,7 @@ class CellEvent extends EDEvent {
     if (row != undefined) {
       const [name,type,cell,property,active,inactive] = row;
       mon = {name,type,cell,property,active,inactive};
-
+      EDLogger.info(`Monitored Cell Triggered [${mon.name}][${this._cell}]`)
     }
     return mon;
   }
@@ -74,22 +96,23 @@ class CellEditedEvent extends CellEvent {
 
   fireEvent() {
     var status = EDContext.STATUS.COMPLETED;
-    if (!EDDefs.checkCachedDataChanged(this._cell,this)) {
-      EDDefs.initializeDefinitions(false,true,this);
-      const mon = this.isCellMonitored();
+    EDDefs.initializeDefinitions(false,true,this);
+    const mon = this.isCellMonitored();
+    if (mon == undefined && EDDefs.checkCachedDataChanged(this._cell,this)) {
+      EDLogger.info(`Cached Data Edited [${this._cell}]`);
+    }
+    else {
       if (CHECK_TYPE == mon?.type) {
-        // perform the event and then reset the cell
-        EDLogger.info(`Monitored Cell Triggered [${mon.name}][${this._cell}]`)
-        GSBatch.add.cell(EDContext.context.batch,mon.cell,0);
+          EDLogger.info(`Activating [${mon.name}]`)
+                // perform the event and then reset the cell
+          EDDefs.loadDefinitions([EDContext.context.cfg.EVENT_PROPERTIES],true,false);
+          GSBatch.add.cell(EDContext.context.batch,mon.cell,0);
       }
       else {
         EDLogger.info(`Ignored Edited Cell [ ${this._cell} ]`);
         status = EDContext.STATUS.IGNORED;
-     }
-    }
-    else {
-      EDLogger.info(`Cached Data Edited [${this._cell}]`);
-    }
+      }
+    }  
 
     return status
   }

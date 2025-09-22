@@ -1,13 +1,14 @@
 var EDLogger = (function () {
   // ---------------- constants ----------------
   var LEVEL = {
-    TRACE     : { level: 0,  name: "TRACE"     },
-    DEBUG     : { level: 1,  name: "DEBUG"     },
-    WARNING   : { level: 2,  name: "WARNING"   },
-    INFO      : { level: 3,  name: "INFO"      },
-    CHARACTER : { level: 5,  name: "CHARACTER" },
-    ERROR     : { level: 10, name: "ERROR"     },
-    DISABLED  : { level: 99, name: "DISABLED"  },
+    PERFORMANCE : { level: 1,  name: "PERF"        },
+    TRACE       : { level: 5,  name: "TRACE"       },
+    DEBUG       : { level: 6,  name: "DEBUG"       },
+    WARNING     : { level: 7,  name: "WARNING"     },
+    INFO        : { level: 8,  name: "INFO"        },
+    CHARACTER   : { level: 9,  name: "CHARACTER"   },
+    ERROR       : { level: 15, name: "ERROR"       },
+    DISABLED    : { level: 99, name: "DISABLED"    },
   };
 
   // ---------------- state ----------------
@@ -16,7 +17,8 @@ var EDLogger = (function () {
   var settings = {
     sheet   : {
       level : LEVEL.INFO.name,
-      maxEntries : 500
+      maxEntries : 500,
+      batchMerge : true
     },
     console : {
       level : LEVEL.TRACE.name
@@ -25,62 +27,56 @@ var EDLogger = (function () {
 
   // ---------------- helpers ----------------
   function _entry(levelObj, msg) {
-//    console.info(msg);
+   // console.info(msg);
     _buffer.push({ logLevel: levelObj, ts: new Date(), msg: msg });
   }
 
   // ---------------- sinks ----------------
 
   // console sink
-  function _flushConsole(entries) {
+  function _flushConsole(entries,opts) {
     var minLevel = LEVEL[settings.console.level ?? LEVEL.TRACE.name].level;
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
       if (e.logLevel.level < minLevel) continue;
       var dt = GSUtils.Date.formatDate(e.ts);
       const lmsg = (typeof e.msg === "string" ) ? e.msg : JSON.stringify(e.msg);
-      var line = Utilities.formatString("【 EVENT : %s 】【 %s 】【 %s 】【 %s 】",EDContext.context.eventID, dt, e.logLevel.name, lmsg);
+      var line = Utilities.formatString("【 EVENT : %s 】【 %s 】【 %s 】【 %s 】",EDContext.context.event.activeID, dt, e.logLevel.name, lmsg);
       // Use console.info for uniformity
       console.info(line);
     }
+    return undefined;
 
   }
 
   // sheet sink (skeleton; fill with your GSBatch call if desired)
-  function _flushSheet(entries) {
+  function _flushSheet(entries, opts) {
+
     var minLevel = LEVEL[settings.sheet.level ?? LEVEL.TRACE.name].level;
 
-    // TODO: if you want to batch to a sheet, filter first:
     var rows = [];
     for (var i = entries.length-1; i >= 0; i--) {
       var e = entries[i];
       if (e.logLevel.level < minLevel) continue;
       rows.push([
-        EDContext.context.eventID,
+        EDContext.context.event.activeID,
         GSUtils.Date.formatDate(e.ts),
         e.logLevel.name,
         e.msg
       ]);
     }
 
+    const lBatch = (opts?.singleBatch ?? settings.sheet.batchMerge) ? EDContext.context.batch : GSBatch.newBatch(EDContext.context.ss);
 
-
-    // Example placeholder (uncomment/replace with your implementation):
-
-    if (EDContext.context.batch && rows.length > 0) {
+    if (rows.length > 0) {
 
       var logRange = GSRange.extendA1(EDContext.context.cfg.SHEET_LOG.range, { top:0, bottom:rows.length-1, left:0, right:4 } );
-      GSBatch.insert.range(EDContext.context.batch,logRange,SpreadsheetApp.Dimension.ROWS);
-      GSBatch.add.values(EDContext.context.batch,logRange,rows,EDContext.context);
-      GSBatch.remove.rows(EDContext.context.batch,settings.sheet.maxEntries,rows.length);
+      GSBatch.insert.range(lBatch,logRange,SpreadsheetApp.Dimension.ROWS);
+      GSBatch.add.values(lBatch,logRange,rows,EDContext.context);
+      GSBatch.remove.rows(lBatch,settings.sheet.maxEntries,rows.length,{sheet : EDContext.context.definitions.sheetName});
     }
-
-    // If you want a simple direct write:
-    // if (opts && opts.sheetA1 && rows.length) {
-    //   var rng = GSRange.resolveRange(opts.sheetA1, opts);
-    //   var sheet = rng.getSheet();
-    //   sheet.getRange(rng.getRow(), rng.getColumn(), rows.length, rows[0].length).setValues(rows);
-    // }
+    
+    return lBatch;
 
   }
 
@@ -90,6 +86,7 @@ var EDLogger = (function () {
   // ---------------- public api ----------------
 
   // emit
+  function perf(msg)      { _entry(LEVEL.PERFORMANCE, msg); }
   function trace(msg)     { _entry(LEVEL.TRACE, msg); }
   function debug(msg)     { _entry(LEVEL.DEBUG, msg); }
   function warn(msg)      { _entry(LEVEL.WARNING, msg); }
@@ -98,13 +95,15 @@ var EDLogger = (function () {
   function error(msg)     { _entry(LEVEL.ERROR, msg); }
 
   // flush buffer to sinks
-  function flush() {
+  function flush(opts = {}) {
+    var batches = [];
     var entries = _buffer;
     try {
-      _sinks.forEach(s => s(entries));
+      _sinks.forEach(s => batches.push(s(entries,opts)));
     } finally {
       clear();
     }
+    return batches;
   }
 
   // housekeeping
@@ -123,6 +122,7 @@ var EDLogger = (function () {
     info: info,
     character: character,
     error: error,
+    perf: perf,
 
     // control
     flush: flush,
