@@ -1,12 +1,12 @@
 var EDLogger = (function () {
   // ---------------- constants ----------------
   var LEVEL = {
-    PERFORMANCE : { level: 1,  name: "PERF"        },
+    PERFORMANCE : { level: 1,  name: "PERF "       },
     TRACE       : { level: 5,  name: "TRACE"       },
     DEBUG       : { level: 6,  name: "DEBUG"       },
-    WARNING     : { level: 7,  name: "WARNING"     },
-    INFO        : { level: 8,  name: "INFO"        },
-    CHARACTER   : { level: 9,  name: "CHARACTER"   },
+    WARNING     : { level: 7,  name: "WARN "       },
+    INFO        : { level: 8,  name: "INFO "       },
+    CHARACTER   : { level: 9,  name: "CHAR "       },
     ERROR       : { level: 15, name: "ERROR"       },
     DISABLED    : { level: 99, name: "DISABLED"    },
   };
@@ -27,60 +27,65 @@ var EDLogger = (function () {
 
   // ---------------- helpers ----------------
   function _entry(levelObj, msg) {
-   // console.info(msg);
-    _buffer.push({ logLevel: levelObj, ts: new Date(), msg: msg });
+    //console.info(msg);
+    const entry = { logLevel: levelObj, ts: new Date(), msg: msg ,state : EDContext.context.event.status.state}
+    _buffer.push(entry);
+    _sinks.forEach(s => s(entry));
   }
 
   // ---------------- sinks ----------------
 
+  function _consoleSink(entry,opts) {
+    var minLevel = LEVEL[settings.console.level ?? LEVEL.TRACE.name].level;
+    if (entry.logLevel.level < minLevel) return;
+    var dt = GSUtils.Date.formatDate(entry.ts);
+    const lmsg = (typeof entry.msg === "string" ) ? entry.msg : JSON.stringify(entry.msg);
+    var line = Utilities.formatString("【 %s 】【 %s 】【 %s 】【 %s 】",entry.logLevel.name, dt, entry.state, lmsg);
+    console.info(line);
+
+  }
+
   // console sink
   function _flushConsole(entries,opts) {
-    var minLevel = LEVEL[settings.console.level ?? LEVEL.TRACE.name].level;
-    for (var i = 0; i < entries.length; i++) {
-      var e = entries[i];
-      if (e.logLevel.level < minLevel) continue;
-      var dt = GSUtils.Date.formatDate(e.ts);
-      const lmsg = (typeof e.msg === "string" ) ? e.msg : JSON.stringify(e.msg);
-      var line = Utilities.formatString("【 EVENT : %s 】【 %s 】【 %s 】【 %s 】",EDContext.context.event.activeID, dt, e.logLevel.name, lmsg);
-      // Use console.info for uniformity
-      console.info(line);
-    }
-    return undefined;
-
+    entries.forEach(e => _consoleSink(e));
   }
 
-  // sheet sink (skeleton; fill with your GSBatch call if desired)
   function _flushSheet(entries, opts) {
 
-    var minLevel = LEVEL[settings.sheet.level ?? LEVEL.TRACE.name].level;
+    if (EDContext.context.event.status.state != EDContext.STATUS.IGNORED) {
+      var minLevel = LEVEL[settings.sheet.level ?? LEVEL.TRACE.name].level;
 
-    var rows = [];
-    for (var i = entries.length-1; i >= 0; i--) {
-      var e = entries[i];
-      if (e.logLevel.level < minLevel) continue;
-      rows.push([
-        EDContext.context.event.activeID,
-        GSUtils.Date.formatDate(e.ts),
-        e.logLevel.name,
-        e.msg
-      ]);
-    }
+      var rows = [];
+      for (var i = entries.length-1; i >= 0; i--) {
+        var e = entries[i];
+        if (e.logLevel.level < minLevel) continue;
+        rows.push([
+          EDContext.context.event.id.value,
+          GSUtils.Date.formatDate(e.ts),
+          e.logLevel.name.trim(),
+          e.msg.trim()
+        ]);
+      }
 
-    const lBatch = (opts?.singleBatch ?? settings.sheet.batchMerge) ? EDContext.context.batch : GSBatch.newBatch(EDContext.context.ss);
-
-    if (rows.length > 0) {
-
-      var logRange = GSRange.extendA1(EDContext.context.cfg.SHEET_LOG.range, { top:0, bottom:rows.length-1, left:0, right:4 } );
-      GSBatch.insert.range(lBatch,logRange,SpreadsheetApp.Dimension.ROWS);
-      GSBatch.add.values(lBatch,logRange,rows,EDContext.context);
-      GSBatch.remove.rows(lBatch,settings.sheet.maxEntries,rows.length,{sheet : EDContext.context.definitions.sheetName});
-    }
-    
-    return lBatch;
+      if (rows.length > 0) {
+        const lBatch = (opts?.singleBatch ?? settings.sheet.batchMerge) ? EDContext.context.batch : GSBatch.newBatch(EDContext.context.ss);
+        var clogs = GSBatch.load.rangesNow(settings.sheet.range);
+        var logs = (clogs.length == 0) ? [] : clogs[0].values;
+        const length = Math.min(logs.length+rows.length,settings.sheet.maxEntries);
+        logs.unshift(...rows);
+        logs.length = length;
+        GSBatch.add.values(lBatch,settings.sheet.range,logs,EDContext.context);
+        return lBatch;
+      }
+    }    
+  
+    return undefined;
+  
 
   }
 
-  var _sinks = [_flushConsole,_flushSheet];
+  var _bufferSinks = [_flushSheet];
+  var _sinks = [_consoleSink];
 
 
   // ---------------- public api ----------------
@@ -99,7 +104,7 @@ var EDLogger = (function () {
     var batches = [];
     var entries = _buffer;
     try {
-      _sinks.forEach(s => batches.push(s(entries,opts)));
+      _bufferSinks.forEach(s => batches.push(s(entries,opts)));
     } finally {
       clear();
     }

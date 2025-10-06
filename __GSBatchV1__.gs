@@ -1,5 +1,5 @@
 /** Namespace: GSBatch */
-var GSBatch = (function () {
+var GSBatchV1 = (function () {
   var batchID = 1;
   /* ===================== Public API ===================== */
 
@@ -26,8 +26,8 @@ var GSBatch = (function () {
   /** Commit in ONE call (all queued write requests). */
   function commit(batch,opts = {}) {
     const { includeResponse =  false, clearAfter = true } = opts;
+    console.info(JSON.stringify(batch.requests));
     
-
     if (batch && batch.requests && batch.requests.length) {
       const res = Sheets.Spreadsheets.batchUpdate({
         requests: batch.requests,
@@ -79,6 +79,7 @@ var GSBatch = (function () {
     const fields = 'userEnteredValue' + (needsNumFmt ? ',userEnteredFormat.numberFormat' : '');
 
     batch.requests.push({ updateCells: { range: grid, rows, fields } });
+
     return batch;
   }
 
@@ -168,7 +169,7 @@ var GSBatch = (function () {
   function loadRanges(input, opts = {}) {
 
     const { trim = true } = opts;
-    const valueRenderOption = _renderModeToVRO_(opts.render || 'display');
+    const valueRenderOption = renderMode(opts.render || 'raw');
     const dateTimeRenderOption = opts.dateTime || 'SERIAL_NUMBER';
 
     const norm = _normalizeInputForBatchLoad_(input, EDContext.context.ss);
@@ -211,9 +212,6 @@ var GSBatch = (function () {
     return spreadsheet; // assume Spreadsheet object
   }
 
-  function _isSingleCellGrid_(g) {
-    return (g.endRowIndex - g.startRowIndex === 1) && (g.endColumnIndex - g.startColumnIndex === 1);
-  }
 
   function _jsToCellData_(v, { dtfmt } = {}) {
     const out = { userEnteredValue: null };
@@ -278,7 +276,7 @@ var GSBatch = (function () {
 
   /* ---------- Loader helpers ---------- */
 
-  function _renderModeToVRO_(mode) {
+  function renderMode(mode) {
     switch ((mode || '').toLowerCase()) {
       case 'display': return 'FORMATTED_VALUE';
       case 'raw':     return 'UNFORMATTED_VALUE';
@@ -424,7 +422,8 @@ function deleteRowsA1(batch, a1RowRange) {
 
     /** reads */
     load: {
-      ranges: loadRanges
+      ranges: loadRanges,
+      renderMode
     }
   };
 })();

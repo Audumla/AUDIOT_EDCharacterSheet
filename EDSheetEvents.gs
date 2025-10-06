@@ -1,27 +1,19 @@
-var DEFAULT_OPTS = {
-}
-
-function resolveOpts(opts = {}, dOpts = EDContext.context) {
-  return EDContext.context;
-}
-
 /**
  * The event handler triggered when opening the spreadsheet.
  * @param {Event} e The onOpen event.
  * @see https://developers.google.com/apps-script/guides/triggers#onopen
  */
-function onOpenTriggered(e) {
-  GSPerf.start();
-  GSPerf.monitor(new SheetOpenedEvent()).trigger();
-  GSPerf.stop();
+
+  
+
+function fireMeleeAttack(){
+  new CellEditedEvent("Visual!$AA$15").trigger();
 }
 
-function onEditTriggered(e) {
-  GSPerf.start();
-  GSPerf.monitor(new CellEditedEvent(GSRange.a1FromEvent(e))).trigger();
-  GSPerf.stop();
+function _onOpen(e) {
+  new SheetOpenedEvent().trigger();
 }
-  
+
 
 function onSelectionChange__(e) {
   	

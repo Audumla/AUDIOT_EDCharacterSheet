@@ -1,8 +1,15 @@
+function toBool(x) {
+  if (typeof x === "boolean") return x;
+  if (x == null) return false;
+  const s = String(x).trim().toLowerCase();
+  return !(s === "false" || s === "0" || s === "");
+}
+
 var GSPerf = (function () {
   // WeakMap ensures each original object is wrapped once
 
   const ENABLED_ID = "PERFORMANCE_ENABLED";
-  const enabled = GSUtils.Str.toBool(PropertiesService.getScriptProperties().getProperty(ENABLED_ID) ?? false);
+  const enabled = toBool(PropertiesService.getScriptProperties().getProperty(ENABLED_ID) ?? false);
 
   const WRAP_CACHE = new WeakMap();
 
@@ -133,9 +140,10 @@ var GSPerf = (function () {
 
   function start() {
     if (EDContext.context.logger?.settings.monitorPerformance ?? enabled) {
-      EDDefs = timeAspect(EDDefs);
-      EDContext = timeAspect(EDContext);
       GSBatch = timeAspect(GSBatch);
+      EDProperties.path = timeAspect(EDProperties.path);
+      EDConfig = timeAspect(EDConfig);
+      EDEvent = timeAspect(EDEvent);
     }
   }
 

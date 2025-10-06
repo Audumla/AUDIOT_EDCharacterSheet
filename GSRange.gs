@@ -536,6 +536,28 @@ function composeBox(box) {
     return out;
   }
 
+    // In GSRange public API section (near other helpers)
+  function rangesEqual(a, b) { 
+    return inOrIntersects(a, b, { mode: 'equal' }); 
+  }
+
+
+  /** Strict A1 equality (same sheet + same finite box). */
+  function equalA1(a, b) {
+    try {
+      const A = GSRange.parseBox(a);
+      const B = GSRange.parseBox(b);
+      const sameSheet = (A.sheetName || null) === (B.sheetName || null);
+      const finiteA = A.c2 !== Number.POSITIVE_INFINITY && A.r2 !== Number.POSITIVE_INFINITY;
+      const finiteB = B.c2 !== Number.POSITIVE_INFINITY && B.r2 !== Number.POSITIVE_INFINITY;
+      if (!sameSheet || !finiteA || !finiteB) return false;
+      return (A.c1 === B.c1 && A.c2 === B.c2 && A.r1 === B.r1 && A.r2 === B.r2);
+    } catch (e) {
+      return false;
+    }
+  }
+
+
   /**
    * Relation test between two inputs (A1 or Range). 'auto' = single-cell A within B, else intersect.
    * @param {string|GoogleAppsScript.Spreadsheet.Range} a
@@ -596,6 +618,7 @@ function composeBox(box) {
     parseBox,
     composeBox,
     ensureSheetOnA1,
+    equalA1,
 
     // range resolution/format
     resolveRange,
@@ -614,5 +637,6 @@ function composeBox(box) {
     rangesIntersect,
     rangeWithin,
     rangeContains,
+    rangesEqual,
   };
 })();

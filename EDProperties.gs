@@ -1,11 +1,6 @@
-var EDProperties = (function () {
 
-  const UNPACK = {
-    object : "object",
-    array  : "array",
-    pair   : "pair",
-    none   : "none",
-  }
+
+var EDProperties = (function () {
 
   // Non-enumerable key to hold tracking data on target objects
   const __TRACK__KEY = '__tracking__'; // { paths:Set<string>, baseline: Map<string, any> }
@@ -26,23 +21,25 @@ var EDProperties = (function () {
    *  - headersRow     : number (0-based) row index to read headers from (optional)
    *  - nameHeader     : header string to use as the path (object mode)
    *  - nameCol        : number (0-based) column index for the path (object mode)
-   *  - prefix         : string to prepend to path (object/pair)
+   *  - prefix         : string to prepend to path (object/pair) 
    *  - track          : boolean to snapshot created leaf paths (pair/object)
+   *  - name           : the name of the property within the target to store the unpacked results under
    */
   function unpack(target, rows, opts = {}) {
     if (!Array.isArray(rows)) throw new Error('rows must be a 2D array like [[name, ...], ...]');
     const mode = (opts.mode || 'pair').toLowerCase();
     const track = !!opts.track;
     const prefix = opts?.prefix;
-    const name = opts?.name ?? "NO NAME";
+    const name = opts?.name ?? undefined;
+    const id = opts?.id ?? "UNKNOWN";
 
-    EDLogger.debug(`Unpacking [ ${name} ][ mode: ${mode} ][ Rows: ${rows.length}]`);
+    EDLogger.trace(`Unpacking [ ${id} ][ mode: ${mode} ][ Rows: ${rows.length}]`);
 
     if (mode === 'array') {
       const { headers, dataStart } = _resolveHeaders(rows, opts);
       if (!headers || !headers.length) return [];
 
-      const out = [];
+      const out = name ? (typeof target[name] === "array" ? target[name] : (target[name] = [])) : [];
       for (let r = dataStart; r < rows.length; r++) {
         const row = rows[r] || [];
         const obj = {};
@@ -61,6 +58,7 @@ var EDProperties = (function () {
         const paths = out.map((_, i) => String(i));
         _attachTrackingBaseline_(out, paths);
       }
+ 
       return out;
     }
 
@@ -91,7 +89,7 @@ var EDProperties = (function () {
         const parts = partsRaw.map(GSUtils.Obj.safePropName);
 
         // Walk/create intermediate nodes
-        let node = target;
+        let node = name ? (target[name] ? target[name] : target[name] = {}) : target;
         for (let p = 0; p < parts.length - 1; p++) {
           const key = parts[p];
           const cur = node[key];
@@ -172,7 +170,7 @@ var EDProperties = (function () {
     for (const p of tr.paths) {
       if (!GSUtils.Obj.deepEqualSimple(
         tr.baseline.get(p),
-        getAtPath(root, p, { sep: '|', transform: safePropName })
+        getAtPath(root, p, { sep: '|', transform: GSUtils.Obj.safePropName })
       )) return true;
     }
     return false;
@@ -198,7 +196,7 @@ var EDProperties = (function () {
 
     for (const p of tr.paths) {
       const before = tr.baseline.get(p);
-      const after  = getAtPath(root, p, { sep: '|', transform: safePropName });
+      const after  = getAtPath(root, p, { sep: '|', transform: GSUtils.Obj.safePropName });
       if (!GSUtils.Obj.deepEqualSimple(before, after)) {
         out.push({ property: p, before, after });
       }
@@ -221,7 +219,7 @@ var EDProperties = (function () {
 
     for (const p of tr.paths) {
       tr.baseline.set(p, GSUtils.Obj.deepCloneSimple(
-        getAtPath(root, p, { sep: '|', transform: safePropName })
+        getAtPath(root, p, { sep: '|', transform: GSUtils.Obj.safePropName })
       ));
     }
   }
@@ -264,7 +262,7 @@ var EDProperties = (function () {
     }
     // Add paths and snapshot their current values
     for (const p of paths) tr.paths.add(p);
-    for (const p of paths) tr.baseline.set(p, GSUtils.Obj.deepCloneSimple(getAtPath(root, p, { sep: '|', transform: safePropName })));
+    for (const p of paths) tr.baseline.set(p, GSUtils.Obj.deepCloneSimple(getAtPath(root, p, { sep: '|', transform: GSUtils.Obj.safePropName })));
   }
 
 
@@ -281,7 +279,7 @@ var EDProperties = (function () {
    * By default uses '|' separator and `safePropName` segment transform.
    */
   function getAtPath(obj, path, opts = {}) {
-    const xform = opts.transform || safePropName;
+    const xform = opts.transform || GSUtils.Obj.safePropName;
     const parts = String(path).split(/\||\./).map(s => s.trim()).filter(Boolean);
     let cur = obj;
     for (const p of parts) {
@@ -291,10 +289,178 @@ var EDProperties = (function () {
     return cur;
   }  
 
+  /**
+   * Reverse of unpack: recreate a 2-D values array from live data in the context.
+   *
+   * @param {object} spec
+   *   Either a definition object (with fields like { unpack, values, name, prefix })
+   *   or a plain spec: { mode, template, name, prefix }
+   *   - mode      : EDProperties.path.UNPACK.* ('pair'|'array'|'object'|'none')
+   *   - template  : 2-D array used as the shape/reference (defaults to spec.values)
+   *   - name      : path/name where unpack originally landed (fallback to spec.prefix || spec.name)
+   *   - prefix    : legacy prefix (considered when name missing)
+   * @param {object} [opts]
+   *   - target?: object                 default = EDContext.context
+   *   - includeExtras?: boolean         default = false (only keys/cols from template)
+   *   - objectValueCol?: number         1-based index of the "value" column (object mode)
+   *   - arrayHeaderRow?: boolean        force treat first row as header (array mode). Default: auto.
+   * @returns {any[][]} 2-D array suitable for writing back to the sheet
+   */
+  function repack(spec, opts = {}) {
+    if (!spec || typeof spec !== 'object') throw new Error('repack: spec/definition required');
+
+    const target = opts.target || EDContext.context;
+    const mode   = (spec.mode || spec.unpack || UNPACK.pair);
+    const name   = spec.prefix || '';
+    const template = _ensure2DArray(spec.template || spec.values || []);
+
+    // Resolve where the data lives now (the same place unpack wrote it)
+    const sourcePath = name || '';
+    const live = sourcePath ? getAtPath(target, sourcePath, { sep: '|', transform: GSUtils.Obj.safePropName }) : target;
+
+    switch (mode) {
+      case UNPACK.pair:   return _repackPair(template, live, !!opts.includeExtras);
+      case UNPACK.array:  return _repackArray(template, live, !!opts.includeExtras, opts.arrayHeaderRow);
+      case UNPACK.object: return _repackObject(template, live, opts.objectValueCol);
+      case UNPACK.none:   return template.slice(); // identity / nothing to rebuild
+      default:            return template.slice();
+    }
+  }
+
+  /**
+   * Repack many specs/defs at once. Each item may be a def or {mode,template,name,prefix}.
+   * @param {Array<object>} specs
+   * @param {object} [opts] same as repack(...)
+   * @returns {Array<{name:string, rows:any[][]}>}
+   */
+  function repackMany(specs, opts = {}) {
+    if (!Array.isArray(specs)) throw new Error('repackMany: specs must be an array');
+    const out = [];
+    for (const s of specs) {
+      const nm = s?.name || s?.prefix || '';
+      const rows = repack(s, opts);
+      out.push({ name: nm, rows });
+    }
+    return out;
+  }
+
+  /* =================== per-mode reverse builders =================== */
+
+  // pair: template Nx2 (key,value). If includeExtras=false, only keys from col1 of template.
+  function _repackPair(template, liveObj, includeExtras) {
+    const keysFromTemplate = template.map(r => String((r && r[0]) ?? '')).filter(Boolean);
+    const obj = (liveObj && typeof liveObj === 'object' && !Array.isArray(liveObj)) ? liveObj : {};
+    const keys = includeExtras ? _unique([...keysFromTemplate, ...Object.keys(obj)]) : keysFromTemplate;
+
+    const out = [];
+
+    for (const k of keys) {
+      out.push([k, getAtPath(obj,k)])
+    };
+    return out;
+  }
+
+  // array:
+  //  - If live is array-of-arrays → return it (trim to template width if includeExtras=false).
+  //  - If live is array-of-objects → build rows by columns (header from template if present/forced).
+  function _repackArray(template, live, includeExtras, arrayHeaderRowOpt) {
+    const hasTpl = template.length > 0;
+    const tplHeaderIsStrings = hasTpl && _rowIsAllStrings(template[0]);
+    const treatHeader = (arrayHeaderRowOpt == null) ? tplHeaderIsStrings : !!arrayHeaderRowOpt;
+
+    const templateCols = (treatHeader && hasTpl) ? template[0].map(String) : [];
+    // live array-of-arrays:
+    if (Array.isArray(live) && live.length && Array.isArray(live[0])) {
+      if (includeExtras) return live.slice();
+      // trim width to template header cols (or template first row width if no header)
+      const width = templateCols.length || (template[0] ? template[0].length : 0);
+      if (!width) return live.slice();
+      return live.map(r => r.slice(0, width));
+    }
+
+    // live array-of-objects (or empty)
+    const arr = Array.isArray(live) ? live : [];
+    const objs = arr.filter(x => x && typeof x === 'object' && !Array.isArray(x));
+
+    let cols = [];
+    if (!includeExtras && templateCols.length) {
+      cols = templateCols.slice();
+    } else if (includeExtras) {
+      const set = new Set();
+      for (const o of objs) for (const k of Object.keys(o)) set.add(k);
+      cols = Array.from(set);
+      if (!cols.length && templateCols.length) cols = templateCols.slice();
+    } else {
+      cols = (objs[0] && Object.keys(objs[0])) || templateCols.slice();
+    }
+
+    const out = [];
+    if (treatHeader && cols.length) out.push(cols.slice());
+    for (const o of objs) out.push(cols.map(c => o[c]));
+    return out;
+  }
+
+  // object:
+  //  - column 1 holds a path/key; one column holds the "value" (auto col2 if present).
+  //  - copy template rows and refresh the value column from live by that path.
+  function _repackObject(template, liveRoot, valueColIdx) {
+    const valueCol = _autoValueCol(template, valueColIdx); // 1-based
+    const out = [];
+    for (const row of template) {
+      const kp = String((row && row[0]) ?? '').trim();
+      if (!kp) { out.push((row || []).slice()); continue; }
+      const v = getAtPath(liveRoot ?? EDContext.context, kp, { sep: '|', transform: GSUtils.Obj.safePropName });
+      const newRow = (row || []).slice();
+      newRow[valueCol - 1] = v;
+      out.push(newRow);
+    }
+    return out;
+  }
+
+  /* ========================== small helpers ========================== */
+
+  function _ensure2DArray(v) {
+    if (v == null) return [];
+    if (Array.isArray(v) && (v.length === 0 || Array.isArray(v[0]))) return v;
+    return [Array.isArray(v) ? v : [v]];
+  }
+
+  function _rowIsAllStrings(row) {
+    if (!row || !row.length) return false;
+    for (const c of row) if (c != null && typeof c !== 'string') return false;
+    return true;
+  }
+
+  function _unique(arr) { const s = new Set(); const o = []; for (const x of arr) if (!s.has(x)) { s.add(x); o.push(x);} return o; }
+
+  function _autoValueCol(template, overrideIdx) {
+    if (overrideIdx && overrideIdx > 0) return overrideIdx;
+    const w = template[0] ? template[0].length : 0;
+    if (w >= 2) return 2;
+    if (w >= 1) return 1;
+    return 1;
+  }
+
+
+  function mappingByName(name) {
+    GSUtils.Arr.findRowByColumn(EDContext.context.config.PROPERTY_MAPPINGS.values,0,name);
+  }
+
+  function mappingByCell(loc, opts = {}) {
+
+    GSUtils.Arr.findRowByColumn(EDContext.context.config.PROPERTY_MAPPINGS.values,1,loc);
+  }
+
+  function getCharacterProperties() {
+
+  }
+
   // Public API
   return {
     path : {
       unpack,
+      repack,          
+      repackMany,      
       isTrackedModified,
       getTrackedChanges,
       commitTrackedBaseline,
@@ -302,6 +468,10 @@ var EDProperties = (function () {
       getAtPath,
       UNPACK
     },
+
+    mapping : {
+
+    }
 
 
 

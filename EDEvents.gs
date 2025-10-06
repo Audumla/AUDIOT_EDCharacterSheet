@@ -1,7 +1,7 @@
 const SELECTED_TYPE = "SELECTED";
 const CHECK_TYPE = "CHECK";
-EVENT_ID = "Event.ActiveID";
-EVENT_STATUS = "Event.Status";
+EVENT_ID = "Event.ID.Value";
+EVENT_STATUS = "Event.Status.State";
 
 class EDEvent {
   constructor() {
@@ -9,26 +9,34 @@ class EDEvent {
   }
 
   openEvent() {
-    EDContext.context.event.status = EDContext.STATUS.PROCESSING;
-    EDLogger.info(`${this._name} [${EDContext.context.event.status.name}]`);
+    EDContext.initializeContext();
+    EDLogger.info(this._name);
+
   }
 
-  closeEvent() {  
+  closeEvent(state = EDContext.STATUS.UNKNOWN) {  
+    EDContext.context.event.status.state = state;
     var batches = new Set();
-    batches.add(EDContext.context.batch);
+
     try {
-      if (EDContext.context.event.status != EDContext.STATUS.IGNORED) {
-        EDLogger.trace(`Incremented EventID [${EDContext.context.event.activeID} : ${EDContext.context.event.activeID+1}]`)
-        const eventIDr = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.SETTINGS.values,0,EVENT_ID);
-        eventIDr[1] = EDContext.context.event.activeID+1;
-        EDDefs.setCacheData(EDContext.context.cfg.SETTINGS,EDContext.context);
-        const eventIDloc = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.PROPERTY_MAPPINGS.values,0,EVENT_ID);
-        GSBatch.add.cell(EDContext.context.batch,eventIDloc[1],eventIDr[1]);
+      try {
+        if (EDContext.context.event.status.state != EDContext.STATUS.IGNORED) {
+  //        EDLogger.trace(JSON.stringify(EDContext.context.event));        
+          EDLogger.trace(`Incremented EventID [${EDContext.context.event.id.value} : ${EDContext.context.event.id.value+1}]`);
+          EDContext.context.event.id.value++;
+          EDContext.context.config.sheet.status.values = EDProperties.path.repack(EDContext.context.config.sheet.status)
+          EDConfig.updateCache(EDContext.context.config.sheet);
+          GSBatch.add.cell(EDContext.context.batch,EDContext.context.event.id.cell,EDContext.context.event.id.value);
+        }
+        else {
+          EDContext.context.event.id.value = 0;
+        }
+        EDLogger.info(`${this._name} [${EDContext.context.event.status.state}] [${(new Date() - EDContext.context.date.time)/1000} secs]`);
       }
-      else {
-        EDContext.context.event.activeID = 0;
+      finally {
+        GSBatch.commit(EDContext.context.batch);
       }
-      EDLogger.info(`${this._name} [${EDContext.context.event.status.name}] [${(new Date() - EDContext.context.startTime)/1000} secs][${GSBatch.size(EDContext.context.batch)} bytes]`);
+
       EDLogger.flush().forEach(b => {if (b != undefined) batches.add(b)});
     }
     finally {
@@ -38,17 +46,16 @@ class EDEvent {
   }
 
   trigger() {
-    DEFAULT_OPTS = EDContext.initializeContext();
-    const ctx = EDContext.context;
+    var state = EDContext.STATUS.UNKNOWN;
     try {
-      this.openEvent(ctx);
-      ctx.event.status = this.fireEvent(ctx);
+      this.openEvent();
+      state = this.fireEvent();
       
     } catch(e) {
-      ctx.event.status = EDContext.STATUS.FAILED;
-      ctx.logger.error(e.stack);
+      state = EDContext.STATUS.FAILED;
+      EDLogger.error(e.stack);
     } finally {
-      this.closeEvent(ctx);
+      this.closeEvent(state);
     }
   }
 }
@@ -61,7 +68,9 @@ class SheetOpenedEvent extends EDEvent {
 
   fireEvent() {
     EDLogger.info(`Sheet Loaded [${EDContext.context.ssid}]`)
-    EDDefs.initializeDefinitions(false,false,EDContext.context);
+    EDConfig.initialize({flushCache : true })
+    EDContext.context.event.status.state = EDContext.STATUS.PROCESSING;
+    EDTriggers.setMenu()
     return EDContext.STATUS.COMPLETED;
   }
 
@@ -75,12 +84,9 @@ class CellEvent extends EDEvent {
   }
 
   isCellMonitored() {
-    const row = GSUtils.Arr.findRowByColumn(EDContext.context.cfg.EVENT_DEFINITIONS.values,2,this._cell);
-    var mon = undefined
-    if (row != undefined) {
-      const [name,type,cell,property,active,inactive] = row;
-      mon = {name,type,cell,property,active,inactive};
-      EDLogger.info(`Monitored Cell Triggered [${mon.name}][${this._cell}]`)
+    const mon = GSUtils.Arr.findFirst(EDContext.context.mappings,"cell",this._cell);
+    if (mon != undefined) {
+      EDLogger.info(`Monitored Cell Triggered [${mon.event}][${this._cell}]`)
     }
     return mon;
   }
@@ -95,24 +101,31 @@ class CellEditedEvent extends CellEvent {
   }
 
   fireEvent() {
-    var status = EDContext.STATUS.COMPLETED;
-    EDDefs.initializeDefinitions(false,true,this);
-    const mon = this.isCellMonitored();
-    if (mon == undefined && EDDefs.checkCachedDataChanged(this._cell,this)) {
-      EDLogger.info(`Cached Data Edited [${this._cell}]`);
+    var status = EDContext.STATUS.IGNORED;
+    EDConfig.initialize();
+    EDContext.context.event.status.state = EDContext.STATUS.PROCESSING;
+    
+    const monitored = this.isCellMonitored();
+    if (monitored) {
+      if (CHECK_TYPE == monitored?.type) {
+          EDLogger.info(`Activating [${monitored.event}]`)
+                // perform the event and then reset the cell
+//          const rng = GSBatch.load.rangesNow([EDContext.context.config.EVENT_PROPERTIES_])
+
+          EDLogger.debug(JSON.stringify(monitored));
+          GSBatch.add.cell(EDContext.context.batch,monitored.cell,0);
+          status = EDContext.STATUS.COMPLETED;
+      }
     }
     else {
-      if (CHECK_TYPE == mon?.type) {
-          EDLogger.info(`Activating [${mon.name}]`)
-                // perform the event and then reset the cell
-          EDDefs.loadDefinitions([EDContext.context.cfg.EVENT_PROPERTIES],true,false);
-          GSBatch.add.cell(EDContext.context.batch,mon.cell,0);
+      if (EDConfig.checkConfigEdited(this._cell)) {
+          status = EDContext.STATUS.COMPLETED;
       }
-      else {
+    }
+
+    if (status == EDContext.STATUS.IGNORED) {
         EDLogger.info(`Ignored Edited Cell [ ${this._cell} ]`);
-        status = EDContext.STATUS.IGNORED;
-      }
-    }  
+    }
 
     return status
   }
