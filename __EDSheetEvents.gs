@@ -6,13 +6,6 @@
 
   
 
-function fireMeleeAttack(){
-  new CellEditedEvent("Visual!$AA$15").trigger();
-}
-
-function _onOpen(e) {
-  new SheetOpenedEvent().trigger();
-}
 
 
 function onSelectionChange__(e) {

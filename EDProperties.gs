@@ -30,16 +30,62 @@ var EDProperties = (function () {
     const mode = (opts.mode || 'pair').toLowerCase();
     const track = !!opts.track;
     const prefix = opts?.prefix;
-    const name = opts?.name ?? undefined;
+    //const name = opts?.name ?? undefined;
     const id = opts?.id ?? "UNKNOWN";
 
-    EDLogger.trace(`Unpacking [ ${id} ][ mode: ${mode} ][ Rows: ${rows.length}]`);
+    // ---------- helpers ----------
+    const splitPath = (s) =>
+      String(s).split(/\||\./).map(t => t.trim()).filter(Boolean).map(GSUtils.Obj.safePropName);
+
+    const ensurePath = (root, parts, defaultLeaf = {}) => {
+      if (!root || typeof root !== 'object') {
+        throw new Error('unpack: target must be an object');
+      }
+      if (!Array.isArray(parts) || !parts.length) {
+        return { node: root, leafKey: undefined };
+      }
+
+      let node = root;
+
+      // create/normalize intermediates (everything except the final key)
+      for (let i = 0; i < parts.length - 1; i++) {
+        const k = parts[i];
+        const cur = node[k];
+        if (cur == null) {
+          node[k] = {};
+        } else if (typeof cur !== 'object' || Array.isArray(cur)) {
+          node[k] = { __value: cur };
+        }
+        node = node[k];
+      }
+
+      // ensure/normalize the final leaf
+      const leafKey = parts[parts.length - 1];
+      const curLeaf = node[leafKey];
+
+      if (curLeaf == null) {
+        node[leafKey] = defaultLeaf; // use the provided default directly
+      } 
+
+      return { node : node[leafKey], leafKey };
+    };
+
+
+    const setAtPath = (root, pathStr, val) => {
+      const parts = splitPath(pathStr);
+      if (!parts.length) return val;
+      const { node, leafKey } = ensurePath(root, parts);
+      node[leafKey] = val;
+      return val;
+    };
+
+    EDLogger.trace(`Unpacking [ ${id} ]${prefix ? `[ prefix: ${prefix} ]` : ``}[ mode: ${mode} ][ Rows: ${rows.length}]`);
 
     if (mode === 'array') {
       const { headers, dataStart } = _resolveHeaders(rows, opts);
       if (!headers || !headers.length) return [];
 
-      const out = name ? (typeof target[name] === "array" ? target[name] : (target[name] = [])) : [];
+      const out = ensurePath(target,splitPath(prefix ? prefix : id),[]).node;
       for (let r = dataStart; r < rows.length; r++) {
         const row = rows[r] || [];
         const obj = {};
@@ -68,6 +114,7 @@ var EDProperties = (function () {
     const createdPaths = [];
 
     if (mode === 'object') {
+
       const { headers, dataStart } = _resolveHeaders(rows, opts);
       if (!headers || !headers.length) return target;
       const nameCol = _resolveNameCol(headers, opts);
@@ -89,7 +136,7 @@ var EDProperties = (function () {
         const parts = partsRaw.map(GSUtils.Obj.safePropName);
 
         // Walk/create intermediate nodes
-        let node = name ? (target[name] ? target[name] : target[name] = {}) : target;
+        let node = target;
         for (let p = 0; p < parts.length - 1; p++) {
           const key = parts[p];
           const cur = node[key];
@@ -111,6 +158,7 @@ var EDProperties = (function () {
 
         node[leafKey] = leaf; // overwrite
         if (track) createdPaths.push(pathStr);
+
       }
     } else {
       // mode: 'pair'
@@ -307,26 +355,27 @@ var EDProperties = (function () {
    * @returns {any[][]} 2-D array suitable for writing back to the sheet
    */
   function repack(spec, opts = {}) {
-    if (!spec || typeof spec !== 'object') throw new Error('repack: spec/definition required');
+  if (!spec || typeof spec !== 'object') throw new Error('repack: spec/definition required');
 
-    const target = opts.target || EDContext.context;
-    const mode   = (spec.mode || spec.unpack || UNPACK.pair);
-    const name   = spec.prefix || '';
-    const template = _ensure2DArray(spec.template || spec.values || []);
+  const target   = opts.target || EDContext.context;
+  const modeRaw  = (spec.mode || spec.unpack || 'pair');
+  const mode     = String(modeRaw).toLowerCase(); // accept 'PAIR' | 'ARRAY' | 'OBJECT'
+  const sourcePath = spec.prefix || '';           // unpack writes under `prefix`
+  const template = _ensure2DArray(spec.template || spec.values || []);
 
-    // Resolve where the data lives now (the same place unpack wrote it)
-    const sourcePath = name || '';
-    const live = sourcePath ? getAtPath(target, sourcePath, { sep: '|', transform: GSUtils.Obj.safePropName }) : target;
+  // Where the data lives now (same place unpack wrote it)
+  const liveRoot = sourcePath
+    ? getAtPath(target, sourcePath, { sep: '|', transform: GSUtils.Obj.safePropName })
+    : target;
 
-    switch (mode) {
-      case UNPACK.pair:   return _repackPair(template, live, !!opts.includeExtras);
-      case UNPACK.array:  return _repackArray(template, live, !!opts.includeExtras, opts.arrayHeaderRow);
-      case UNPACK.object: return _repackObject(template, live, opts.objectValueCol);
-      case UNPACK.none:   return template.slice(); // identity / nothing to rebuild
-      default:            return template.slice();
-    }
+  switch (mode) {
+    case 'pair':   return _repackPair(template, liveRoot, !!opts.includeExtras);
+    case 'array':  return _repackArray(template, liveRoot, !!opts.includeExtras, opts.arrayHeaderRow);
+    case 'object': return _repackObject(template, liveRoot);
+    case 'none':   return template.slice();
+    default:       return template.slice();
   }
-
+}
   /**
    * Repack many specs/defs at once. Each item may be a def or {mode,template,name,prefix}.
    * @param {Array<object>} specs
@@ -400,22 +449,59 @@ var EDProperties = (function () {
     return out;
   }
 
-  // object:
-  //  - column 1 holds a path/key; one column holds the "value" (auto col2 if present).
-  //  - copy template rows and refresh the value column from live by that path.
-  function _repackObject(template, liveRoot, valueColIdx) {
-    const valueCol = _autoValueCol(template, valueColIdx); // 1-based
-    const out = [];
-    for (const row of template) {
-      const kp = String((row && row[0]) ?? '').trim();
-      if (!kp) { out.push((row || []).slice()); continue; }
-      const v = getAtPath(liveRoot ?? EDContext.context, kp, { sep: '|', transform: GSUtils.Obj.safePropName });
-      const newRow = (row || []).slice();
-      newRow[valueCol - 1] = v;
-      out.push(newRow);
-    }
-    return out;
+/**
+ * Object mode repack:
+ * - First row treated as headers if all strings (copied through unchanged).
+ * - Column 1 is the path/key (relative to `prefix`).
+ * - For columns 2..N, pull values from the leaf object at that path using
+ *   header names → safePropName(header) as keys (mirrors unpack(object)).
+ */
+function _repackObject(template, liveRoot) {
+  const hasTpl = template.length > 0;
+  const headerIsStrings = hasTpl && _rowIsAllStrings(template[0]);
+  const headers = headerIsStrings ? template[0].map(h => (h == null ? '' : String(h))) : [];
+  const width   = hasTpl ? (template[0] ? template[0].length : 0) : 0;
+
+  const out = [];
+
+  // Copy header row through unchanged
+  let startRow = 0;
+  if (headerIsStrings) {
+    out.push(template[0].slice());
+    startRow = 1;
   }
+
+  for (let r = startRow; r < template.length; r++) {
+    const row = template[r] || [];
+    const keyPath = String((row[0] ?? '')).trim();
+    // If no key in col1, just echo the row back
+    if (!keyPath) { out.push(row.slice()); continue; }
+
+    // Look up the leaf object at that key (relative to prefix)
+    const leaf = getAtPath(liveRoot ?? EDContext.context, keyPath, {
+      sep: '|',
+      transform: GSUtils.Obj.safePropName
+    });
+
+    // Rebuild row: col1 stays the key; cols 2..N map from leaf by header
+    const newRow = row.slice(0, width || row.length);
+    if (headerIsStrings && headers.length > 1 && leaf && typeof leaf === 'object') {
+      for (let c = 1; c < headers.length; c++) {
+        const hdr = headers[c];
+        if (!hdr) { newRow[c] = undefined; continue; }
+        const prop = GSUtils.Obj.safePropName(hdr);
+        newRow[c] = leaf[prop];
+      }
+    } else if (!headerIsStrings) {
+      // No explicit headers: keep whatever was in template beyond col1
+      // (you can extend here if you want a heuristic)
+    }
+
+    out.push(newRow);
+  }
+
+  return out;
+}
 
   /* ========================== small helpers ========================== */
 

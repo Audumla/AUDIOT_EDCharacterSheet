@@ -14,8 +14,12 @@ class EDEvent {
 
   }
 
+  setStatus(status) {
+    EDContext.context.event.status.state = status;
+  }
+
   closeEvent(state = EDContext.STATUS.UNKNOWN) {  
-    EDContext.context.event.status.state = state;
+    this.setStatus(state);
     var batches = new Set();
 
     try {
@@ -31,16 +35,17 @@ class EDEvent {
         else {
           EDContext.context.event.id.value = 0;
         }
-        EDLogger.info(`${this._name} [${EDContext.context.event.status.state}] [${(new Date() - EDContext.context.date.time)/1000} secs]`);
       }
       finally {
         GSBatch.commit(EDContext.context.batch);
+
       }
 
       EDLogger.flush().forEach(b => {if (b != undefined) batches.add(b)});
     }
     finally {
       batches.forEach(b => GSBatch.commit(b));
+      EDLogger.info(`${this._name} [${(new Date() - EDContext.context.date.time)/1000} secs]`);
     }
 
   }
@@ -50,7 +55,6 @@ class EDEvent {
     try {
       this.openEvent();
       state = this.fireEvent();
-      
     } catch(e) {
       state = EDContext.STATUS.FAILED;
       EDLogger.error(e.stack);
@@ -64,13 +68,14 @@ class SheetOpenedEvent extends EDEvent {
   constructor() {
     super();
     this._name = "Sheet Opened Event";
+    GSBatch.defaultMode = GSBatch.MODE.SIMPLE;
   }
 
   fireEvent() {
     EDLogger.info(`Sheet Loaded [${EDContext.context.ssid}]`)
     EDConfig.initialize({flushCache : true })
-    EDContext.context.event.status.state = EDContext.STATUS.PROCESSING;
-    EDTriggers.setMenu()
+    this.setStatus(EDContext.STATUS.PROCESSING);
+    EDTriggers.writeStatus(EDTriggers.checkInstalled());
     return EDContext.STATUS.COMPLETED;
   }
 
@@ -101,14 +106,17 @@ class CellEditedEvent extends CellEvent {
   }
 
   fireEvent() {
+
     var status = EDContext.STATUS.IGNORED;
     EDConfig.initialize();
-    EDContext.context.event.status.state = EDContext.STATUS.PROCESSING;
+
+    this.setStatus(EDContext.STATUS.PROCESSING);
     
     const monitored = this.isCellMonitored();
     if (monitored) {
       if (CHECK_TYPE == monitored?.type) {
           EDLogger.info(`Activating [${monitored.event}]`)
+          EDLogger.notify(`🎲Rolling!!🎲`,`Performing ${monitored.event}`,10)
                 // perform the event and then reset the cell
 //          const rng = GSBatch.load.rangesNow([EDContext.context.config.EVENT_PROPERTIES_])
 
@@ -129,4 +137,32 @@ class CellEditedEvent extends CellEvent {
 
     return status
   }
+}
+
+
+class InstallTriggerEvent extends EDEvent {
+  constructor() {
+    super();
+    this._name = "Install Triggers Event";
+  }
+
+  fireEvent() {
+    
+    try {
+      EDConfig.initialize();
+      this.setStatus(EDContext.STATUS.PROCESSING);
+
+      var r = EDTriggers.install();
+      var st = EDTriggers.checkInstalled();
+      EDTriggers.writeStatus(st);
+      EDLogger.notify(st.ok ? 'Triggers installed' : 'Trigger install failed', 'ED Tools', 5);
+      return EDContext.STATUS.COMPLETED;
+
+    } finally {
+      return EDContext.STATUS.FAILED;
+    }
+
+  }
+
+
 }

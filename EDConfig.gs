@@ -56,6 +56,7 @@ var EDConfig = (function () {
       const groupKey       = _groupCacheKey(group);
       const cachedPayload  = (!flushCache && groupCacheable) ? _getGroupCache(props, groupKey) : null;
       if (cachedPayload) EDLogger.debug(`Found Cache [ ${groupKey}]`);
+
       if (!G[groupKey]) G[groupKey] = { cacheable: groupCacheable, name: groupName, defs: {}, groupObj: group };
 
       for (const key of Object.keys(group)) {
@@ -74,8 +75,8 @@ var EDConfig = (function () {
 
           const mode = def.unpack;
           if (mode && mode !== EDProperties.path.UNPACK.none) {
-            const unpackName = def.prefix || groupName || defName;
-            EDProperties.path.unpack(EDContext.context, cachedRows, { mode, name: unpackName, id: defName });
+            const unpackName = def.prefix ;
+            EDProperties.path.unpack(EDContext.context, cachedRows, { mode, prefix: unpackName, id: defName });
           }
 
           G[groupKey].defs[defName] = cachedRows;
@@ -128,8 +129,8 @@ var EDConfig = (function () {
 
       const mode = rec.def.unpack;
       if (mode && mode !== EDProperties.path.UNPACK.none) {
-        const unpackName = rec.def.prefix || rec.groupName || rec.name;
-        EDProperties.path.unpack(EDContext.context, rows, { mode, name: unpackName, id: rec.name });
+        const unpackName = rec.def.prefix ;
+        EDProperties.path.unpack(EDContext.context, rows, { mode, prefix: unpackName, id: rec.name });
       }
 
       if (rec.cacheable) {
@@ -244,7 +245,7 @@ var EDConfig = (function () {
         set++;
       } else if (clearIfNoValues) {
         _clearGroupCache(props, groupKey);
-        EDLogger.warning(`Cleared Cache [ ${groupKey} ]`);
+        EDLogger.warn(`Cleared Cache [ ${groupKey} ]`);
         cleared++;
       } else {
         skipped++;
@@ -376,13 +377,14 @@ function _collectA1Ranges_(inputs, opts = {}) {
     try {
       const raw = props.getProperty(cacheKey);
       if (!raw) return null;
+
       const payload = JSON.parse(raw);
       if (!payload || typeof payload !== 'object') return null;
       if (!payload.defs || typeof payload.defs !== 'object') return null;
       return payload;
     } catch (e) {
-      EDLogger.warning('Bad Cache [ ' + cacheKey + ' ] [ ' + e.msg + ' ]');
-      return null;
+      EDLogger.warn('Bad Cache [ ' + cacheKey + ' ] [ ' + e.msg + ' ]');
+      throw e
     }
   }
 

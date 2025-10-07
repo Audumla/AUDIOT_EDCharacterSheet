@@ -7,8 +7,8 @@ var EDTriggers = (function () {
   var OPEN_FN = 'onOpenTriggered';   // your installable onOpen handler name
   var EDIT_FN = 'onEditTriggered';   // your installable onEdit handler name
 
-  
   function checkInstalled() {
+    // NOTE: Requires auth -> DO NOT call from simple onOpen
     var ts = ScriptApp.getProjectTriggers();
     var openOK = ts.some(function (t) {
       return t.getHandlerFunction() === OPEN_FN &&
@@ -24,89 +24,79 @@ var EDTriggers = (function () {
   function writeStatus(installed) {
     try {
       var a1 = EDContext.context.triggers.status.cell;
-      if (!a1) { EDLogger.warning('[EDTriggers] No Trigger Status Cell configured'); return; }
+      if (!a1) { EDLogger.warn('[EDTriggers] No Trigger Status Cell configured'); return; }
       var rng = GSRange.resolveRange(a1, { ss: EDContext.context.ss });
-      var msg = installed.ok
-        ? 'INSTALLED'
-        : 'NOT INSTALLED';
+      var msg = installed.ok ? 'INSTALLED' : 'NOT INSTALLED';
       rng.setValue(msg);
-      EDLogger.info('[EDTriggers] Status → ' + a1 + ' : ' + msg);
+      EDLogger.debug('ED Triggers Status : ' + msg);
     } catch (e) {
-      EDLogger.error('[EDTriggers] writeStatus error: ' + (e && e.stack || e));
+      EDLogger.error('EDTriggers error: ' + (e && e.stack || e));
     }
   }
 
   function install() {
     var ss = SpreadsheetApp.getActive();
+    var ssId = ss && ss.getId ? ss.getId() : null;
     var res = { createdOpen:false, createdEdit:false };
     try {
       var st = checkInstalled();
-      if (!st.open) { ScriptApp.newTrigger(OPEN_FN).forSpreadsheet(ss).onOpen().create(); res.createdOpen = true; }
-      if (!st.edit) { ScriptApp.newTrigger(EDIT_FN).forSpreadsheet(ss).onEdit().create(); res.createdEdit = true; }
-      EDLogger.info('[EDTriggers] install: open=' + !st.open + ', edit=' + !st.edit);
+      if (!st.open && ssId) {
+        ScriptApp.newTrigger(OPEN_FN).forSpreadsheet(ssId).onOpen().create();
+        res.createdOpen = true;
+      }
+      if (!st.edit && ssId) {
+        ScriptApp.newTrigger(EDIT_FN).forSpreadsheet(ssId).onEdit().create();
+        res.createdEdit = true;
+      }
+      EDLogger.trace('EDTriggers: open=' + !st.open + ', edit=' + !st.edit);
     } catch (e) {
-      EDLogger.error('[EDTriggers] install error: ' + (e && e.stack || e));
+      EDLogger.error('EDTriggers error: ' + (e && e.stack || e));
     }
     return res;
   }
 
   function setMenu() {
-    try {
-      var st = EDTriggers.checkInstalled();
-      EDTriggers.writeStatus(st);
-
-      // 2) Add menu
-      SpreadsheetApp.getUi()
-        .createMenu('ED Tools')
-        .addItem(st.ok ? 'Reinstall Triggers' : 'Install Triggers', 'ED_Menu_InstallTriggers')
-        .addItem('Recheck Trigger Status', 'ED_Menu_RecheckTriggers')
-        .addToUi();
-
-      EDLogger.info('[onOpen] menu added; triggers ok=' + st.ok);
-    } catch (err) {
-      EDLogger.error('[onOpen] ' + (err && err.stack || err));
-    }
+    SpreadsheetApp.getUi()
+      .createMenu('ED Tools')
+      .addItem('Install Triggers', 'installTriggers') 
+      .addItem('Attack', "fireMeleeAttack")
+      .addToUi();
+    EDLogger.debug('ED Menu added'); // keep original message text
   }
-
 
   return {
     checkInstalled: checkInstalled,
     writeStatus: writeStatus,
     install: install,
     setMenu: setMenu
-
   };
 })();
 
-function installTriggers() {
-  try {
-    var r = EDTriggers.install();
-    var st = EDTriggers.checkInstalled();
-    EDTriggers.writeStatus(st);
-    SpreadsheetApp.getActive().toast(st.ok ? 'Triggers installed' : 'Install failed', 'ED Tools', 5);
-  } catch (e) {
-    EDLogger.error('[ED_Menu_InstallTriggers] ' + (e && e.stack || e));
-  }
+function perfTrigger(event) {
+  GSPerf.start();
+  GSPerf.monitor(event).trigger();
+  GSPerf.stop();  
 }
 
-function checkTriggers() {
-  try {
-    var st = EDTriggers.checkInstalled();
-    EDTriggers.writeStatus(st);
-    SpreadsheetApp.getActive().toast(st.ok ? 'Triggers OK' : 'Triggers missing', 'ED Tools', 5);
-  } catch (e) {
-    EDLogger.error('[ED_Menu_RecheckTriggers] ' + (e && e.stack || e));
-  }
+/** Sheet Triggers */
+function onOpen(e) {
+  EDTriggers.setMenu(); 
+}
+
+function installTriggers() {
+  perfTrigger(new InstallTriggerEvent());
 }
 
 function onOpenTriggered(e) {
-  GSPerf.start();
-  GSPerf.monitor(new SheetOpenedEvent()).trigger();
-  GSPerf.stop();
+  perfTrigger(new SheetOpenedEvent());
 }
 
 function onEditTriggered(e) {
-  GSPerf.start();
-  GSPerf.monitor(new CellEditedEvent(GSRange.a1FromEvent(e))).trigger();
-  GSPerf.stop();
+
+  perfTrigger(new CellEditedEvent(GSRange.a1FromEvent(e)));
 }
+
+function fireMeleeAttack(){
+  new CellEditedEvent("Visual!$AA$15").trigger();
+}
+

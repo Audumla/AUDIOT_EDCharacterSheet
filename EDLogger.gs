@@ -8,6 +8,7 @@ var EDLogger = (function () {
     INFO        : { level: 8,  name: "INFO "       },
     CHARACTER   : { level: 9,  name: "CHAR "       },
     ERROR       : { level: 15, name: "ERROR"       },
+    NOTIFY      : { level: 15, name: "NOTIFY"      },
     DISABLED    : { level: 99, name: "DISABLED"    },
   };
 
@@ -18,7 +19,7 @@ var EDLogger = (function () {
     sheet   : {
       level : LEVEL.INFO.name,
       maxEntries : 500,
-      batchMerge : true
+      batchMerge : false
     },
     console : {
       level : LEVEL.TRACE.name
@@ -26,16 +27,16 @@ var EDLogger = (function () {
   }
 
   // ---------------- helpers ----------------
-  function _entry(levelObj, msg) {
+  function _entry(levelObj, msg, title, timeout) {
     //console.info(msg);
-    const entry = { logLevel: levelObj, ts: new Date(), msg: msg ,state : EDContext.context.event.status.state}
+    const entry = { logLevel: levelObj, ts: new Date(), msg: msg ,state : EDContext.context.event.status.state, title : title, timeout : timeout}
     _buffer.push(entry);
-    _sinks.forEach(s => s(entry));
+    _sinks.forEach(s => s(entry,title,timeout));
   }
 
   // ---------------- sinks ----------------
 
-  function _consoleSink(entry,opts) {
+  function _consoleSink(entry) {
     var minLevel = LEVEL[settings.console.level ?? LEVEL.TRACE.name].level;
     if (entry.logLevel.level < minLevel) return;
     var dt = GSUtils.Date.formatDate(entry.ts);
@@ -45,12 +46,35 @@ var EDLogger = (function () {
 
   }
 
+  function _toastSink(entry) {
+    if (LEVEL.NOTIFY == entry.logLevel && entry.msg) {
+      EDContext.context.ss.toast(entry.msg,entry.title ,entry.timeout);
+    }
+  }
+/*
+  function _htmlToast(entry) {
+    if (LEVEL.NOTIFY == entry.logLevel && entry.msg) {
+      const html = HtmlService.createHtmlOutput(`
+        <div style="font-family:sans-serif;text-align:center;padding:8px;">
+          <img src="https://example.com/check.png" width="24">
+          <div>${entry.title}</div>
+          <div>${entry.msg}</div>
+          <script>
+            setTimeout(() => google.script.host.close(), ${entry.timeout ? entry.timeout : 5000});
+          </script>
+        </div>
+      `).setWidth(200).setHeight(100);
+      SpreadsheetApp.getUi().showModelessDialog(html, '');
+    }
+}
+
+*/
   // console sink
-  function _flushConsole(entries,opts) {
+  function _flushConsole(entries) {
     entries.forEach(e => _consoleSink(e));
   }
 
-  function _flushSheet(entries, opts) {
+  function _flushSheet(entries) {
 
     if (EDContext.context.event.status.state != EDContext.STATUS.IGNORED) {
       var minLevel = LEVEL[settings.sheet.level ?? LEVEL.TRACE.name].level;
@@ -68,7 +92,7 @@ var EDLogger = (function () {
       }
 
       if (rows.length > 0) {
-        const lBatch = (opts?.singleBatch ?? settings.sheet.batchMerge) ? EDContext.context.batch : GSBatch.newBatch(EDContext.context.ss);
+        const lBatch = settings.sheet.batchMerge ? EDContext.context.batch : GSBatch.newBatch(EDContext.context.ss);
         var clogs = GSBatch.load.rangesNow(settings.sheet.range);
         var logs = (clogs.length == 0) ? [] : clogs[0].values;
         const length = Math.min(logs.length+rows.length,settings.sheet.maxEntries);
@@ -85,7 +109,7 @@ var EDLogger = (function () {
   }
 
   var _bufferSinks = [_flushSheet];
-  var _sinks = [_consoleSink];
+  var _sinks = [_consoleSink,_toastSink];
 
 
   // ---------------- public api ----------------
@@ -98,6 +122,7 @@ var EDLogger = (function () {
   function info(msg)      { _entry(LEVEL.INFO, msg); }
   function character(msg) { _entry(LEVEL.CHARACTER, msg); }
   function error(msg)     { _entry(LEVEL.ERROR, msg); }
+  function notify(msg,title,timeout) { _entry(LEVEL.NOTIFY, msg,title,timeout); }
 
   // flush buffer to sinks
   function flush(opts = {}) {
@@ -128,6 +153,7 @@ var EDLogger = (function () {
     character: character,
     error: error,
     perf: perf,
+    notify, notify,
 
     // control
     flush: flush,

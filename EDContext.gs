@@ -25,7 +25,7 @@ var EDContext = (function () {
 
       definitions : {
         name   : "config.boot.definitions",
-        range  : "References!$A$2:$D",
+        range  : "References!$A$1:$D20",
         unpack : UNPACK.object,
         values : undefined,
 
@@ -36,21 +36,21 @@ var EDContext = (function () {
       loaded : false,
       cache  : true,
       name   : "config.sheet",
-
+/*
       status : {
         range  : "References!$F$2:$G$3",
         name   : "config.sheet.status",
         unpack : UNPACK.pair,
         values : undefined,
       }
-
+*/
     },
 
     event : {
       loaded : false,
       cache  : false,
       name   : "config.event",
-
+/*
       properties : {
         range  : "'Test Events'!$A:$D",
         name   : "config.event.properties",
@@ -58,13 +58,14 @@ var EDContext = (function () {
         values : undefined,
         prefix : "event.properties"
       }
+      */
     },
 
     core : {
       cache  : true,
       loaded : false,
       name   : "config.core",
-      
+      /*
       settings : {
         range  : "References!$F$8:$G$17",
         name   : "config.core.settings",
@@ -95,13 +96,14 @@ var EDContext = (function () {
         values : undefined,
         prefix : "masks"
       }
-      
+      */
 
     },
 
   }
 
   const context = {
+    cache : PropertiesService.getDocumentProperties(),
 
     config : EDConfiguration,
     logger  : undefined,
@@ -109,7 +111,6 @@ var EDContext = (function () {
     // spreadsheet context
     ss : undefined,
     ssid : undefined,
-    cache : undefined,
 
     // batch context
     batch : undefined,
@@ -150,9 +151,8 @@ var EDContext = (function () {
     overrides = overrides || {};
     const ss = overrides.ss || SpreadsheetApp.getActive();
     // deps
-    context.config =    overrides.cfg    || EDConfiguration;
+    context.config = overrides.cfg    || EDConfiguration;
     context.logger = overrides.logger || EDLogger;
-    context.cache  = PropertiesService.getScriptProperties()    
 
 
     // spreadsheet context
@@ -161,7 +161,7 @@ var EDContext = (function () {
     context.date.tz = ss.getSpreadsheetTimeZone();
 
     // batch context
-    context.batch = overrides.batch || GSBatch.newBatch(ss,{mode : 'values'});
+    context.batch = overrides.batch || GSBatch.newBatch(ss);
 
     // runtime flags/state
     context.event.status.state = overrides.event?.status?.state || STATUS.INITIALIZING;

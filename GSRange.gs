@@ -221,6 +221,9 @@ function composeBox(box) {
       return arg; // Range
     }
     if (typeof arg === 'string') {
+      let range = EDContext.context.ss.getRange(arg);
+      return range
+
       const { sheetName, addrOnly } = splitA1(arg);
       const ss = (opts && opts.ss) ? opts.ss : SpreadsheetApp.getActive();
       const sh = sheetName ? ss.getSheetByName(sheetName) : ss.getActiveSheet();
