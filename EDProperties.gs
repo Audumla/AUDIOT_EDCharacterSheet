@@ -531,7 +531,7 @@ function _repackObject(template, liveRoot) {
   function mappingByCell(loc, opts = {}) {
     let monitored = EDContext.context.event.mappings.find(e => e.cell == loc);
     if (monitored) {
-      EDLogger.info(`Monitored Cell Triggered [${monitored.event}][${this._cell}]`)
+      EDLogger.info(`Monitored Cell Triggered [${monitored.event}][${monitored.cell}]`)
       if (CHECK_TYPE == monitored?.type) {
         EDLogger.info(`Activating [${monitored.event}]`)
         EDLogger.notify(`🎲Rolling!!🎲`,{ title: `Performing ${monitored.event}`})

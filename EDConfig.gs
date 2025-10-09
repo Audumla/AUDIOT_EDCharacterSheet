@@ -21,8 +21,6 @@ var EDConfig = (function () {
    *   - ignoreLoaded = false               // ignore the loaded flag forcing a refresh of the data either from cache or the sheet
    * @returns {{loaded:number, fromCache:number, skipped:number}}
    */
-  // EDConfig.load – full function with flushCache + ignoreLoaded support,
-  // batch loading via GSBatchValues, unpack, and group cache write-back.
   function load(groups, opts = {}) {
     const {
       flushCache = false,
@@ -32,8 +30,6 @@ var EDConfig = (function () {
       ignoreLoaded = false               // NEW: do not skip defs/groups with loaded===true
     } = opts;
 
-//    EDLogger.trace(`Loading Definitions ${JSON.stringify(groups)}`);
-
     const groupList = Array.isArray(groups) ? groups.filter(Boolean) : [groups].filter(Boolean);
     const props = EDContext.context.cache;
 
@@ -41,7 +37,7 @@ var EDConfig = (function () {
     let fromCache = 0, skipped = 0;
 
     // Per-group accumulator for eventual ScriptProperties write
-    const G = {};                        // groupKey => { cacheable, name, defs:{ defName: rows[] }, groupObj }
+    const G = {};                        // groupKey => { cacheable, name, defs:{ defName: rows[] }, meta:{ defName:{unpack,prefix} }, groupObj }
 
     for (const group of groupList) {
       if (!group || typeof group !== 'object') continue;
@@ -57,32 +53,61 @@ var EDConfig = (function () {
       const cachedPayload  = (!flushCache && groupCacheable) ? _getGroupCache(props, groupKey) : null;
       if (cachedPayload) EDLogger.debug(`Found Cache [ ${groupKey}]`);
 
-      if (!G[groupKey]) G[groupKey] = { cacheable: groupCacheable, name: groupName, defs: {}, groupObj: group };
+      if (!G[groupKey]) G[groupKey] = { cacheable: groupCacheable, name: groupName, defs: {}, meta: {}, groupObj: group };
 
-      for (const key of Object.keys(group)) {
-        const def = group[key];
-        if (!GSUtils.Obj.isLeaf(def)) continue;
+      const leafKeys = Object.keys(group).filter(k => GSUtils.Obj.isLeaf(group[k]));
+      const iterFromCache = (!leafKeys.length && cachedPayload && cachedPayload.defs);
 
+      // If we have no leaf defs but do have a cache, iterate the cache entries.
+      // Otherwise iterate the existing group leaves.
+      const defItems = iterFromCache
+        ? Object.keys(cachedPayload.defs).map(defName => {
+            // Try to reconstruct a reasonable property key on the group:
+            // If defName is "groupName.key", use "key"; else use defName as-is.
+            const tail = (groupName && defName.startsWith(groupName + '.'))
+              ? defName.slice(groupName.length + 1)
+              : defName;
+
+            // Reuse existing leaf if present; otherwise synthesize a stub and attach.
+            let def = group[tail];
+            if (!GSUtils.Obj.isLeaf(def)) {
+              def = group[tail] = { name: defName, loaded: false };
+            }
+            return { key: tail, def, defName };
+          })
+        : leafKeys.map(key => {
+            const def = group[key];
+            const defName = def.name || (groupName ? `${groupName}.${key}` : key);
+            return { key, def, defName };
+          });
+
+      for (const { key, def, defName } of defItems) {
         if (!ignoreLoaded && def.loaded === true) { skipped++; continue; }
-
-        const defName = def.name || (groupName ? `${groupName}.${key}` : key);
 
         const cachedRows = (cachedPayload && cachedPayload.defs) ? cachedPayload.defs[defName] : undefined;
         if (cachedRows) {
           def.values = cachedRows;
           def.loaded = true;
 
+          // Use cached meta (fallback to def.*); rehydrate the def for downstream code.
+          const { unpack, prefix } = _pickDefMeta(def, cachedPayload && cachedPayload.meta, defName);
+          def.unpack = unpack;
+          def.prefix = prefix;
 
-          const mode = def.unpack;
-          if (mode && mode !== EDProperties.path.UNPACK.none) {
-            const unpackName = def.prefix ;
-            EDProperties.path.unpack(EDContext.context, cachedRows, { mode, prefix: unpackName, id: defName });
+          if (unpack && unpack !== EDProperties.path.UNPACK.none) {
+            EDProperties.path.unpack(EDContext.context, cachedRows, { mode: unpack, prefix, id: defName });
           }
 
           G[groupKey].defs[defName] = cachedRows;
+          G[groupKey].meta[defName] = { unpack, prefix };
+
           fromCache++;
           continue;
         }
+
+        // No cache rows for this def → if we don't even have a range (because we synthesized),
+        // we can't batch-get it; skip it gracefully.
+        if (!def.range) { continue; }
 
         // Normalize A1 to include sheet for stability
         const rangeA1 = GSRange.ensureSheetOnA1(String(def.range), EDContext.context.ss);
@@ -96,6 +121,8 @@ var EDConfig = (function () {
           cacheable: groupCacheable
         });
       }
+
+
     }
 
     if (!pending.length) {
@@ -129,27 +156,30 @@ var EDConfig = (function () {
 
       const mode = rec.def.unpack;
       if (mode && mode !== EDProperties.path.UNPACK.none) {
-        const unpackName = rec.def.prefix ;
+        const unpackName = rec.def.prefix;
         EDProperties.path.unpack(EDContext.context, rows, { mode, prefix: unpackName, id: rec.name });
       }
 
       if (rec.cacheable) {
-        if (!G[rec.groupKey]) G[rec.groupKey] = { cacheable: true, name: rec.groupName, defs: {}, groupObj: null };
+        if (!G[rec.groupKey]) G[rec.groupKey] = { cacheable: true, name: rec.groupName, defs: {}, meta: {}, groupObj: null };
         G[rec.groupKey].defs[rec.name] = rows;
+        // Persist unpack metadata alongside rows
+        G[rec.groupKey].meta[rec.name] = { unpack: rec.def.unpack, prefix: rec.def.prefix };
       }
 
       loaded++;
     }
 
-    // Merge + write group caches (one ScriptProperty per group)
+    // Merge + write group caches (one ScriptProperty per group), preserving both defs and meta
     for (const groupKey of Object.keys(G)) {
       const meta = G[groupKey];
       if (!meta.cacheable) continue;
 
-      const existing = _getGroupCache(props, groupKey) || { defs: {} };
+      const existing = _getGroupCache(props, groupKey) || { defs: {}, meta: {} };
       const mergedDefs = Object.assign({}, existing.defs, meta.defs);
+      const mergedMeta = Object.assign({}, existing.meta, meta.meta);
 
-      const payload = { defs: mergedDefs, ts: Date.now(), name: meta.name || '' };
+      const payload = { defs: mergedDefs, meta: mergedMeta, ts: Date.now(), name: meta.name || '' };
       _setGroupCache(props, groupKey, payload);
     }
 
@@ -224,6 +254,7 @@ var EDConfig = (function () {
 
       const groupKey = _groupCacheKey(group);
       const defsObj = {};
+      const metaObj = {}; // NEW: persist per-def unpack/prefix
       let anyValues = false;
 
       for (const key of Object.keys(group)) {
@@ -233,6 +264,7 @@ var EDConfig = (function () {
         const defName = def.name || (group.name ? `${group.name}.${key}` : key);
         if (def && def.values != null) {
           defsObj[defName] = def.values;
+          metaObj[defName] = { unpack: def.unpack, prefix: def.prefix };
           if (markLoaded) def.loaded = true;
           anyValues = true;
           EDLogger.trace(`Updating Cache Data [ ${defName} ] [ ${groupKey}) ]`);
@@ -240,7 +272,13 @@ var EDConfig = (function () {
       }
 
       if (anyValues) {
-        const payload = { defs: defsObj, ts: Date.now(), name: group.name || '' };
+        const existing = _getGroupCache(props, groupKey) || { defs: {}, meta: {} };
+        const payload = {
+          defs: Object.assign({}, existing.defs, defsObj),
+          meta: Object.assign({}, existing.meta, metaObj),
+          ts: Date.now(),
+          name: group.name || ''
+        };
         _setGroupCache(props, groupKey, payload);
         set++;
       } else if (clearIfNoValues) {
@@ -257,115 +295,117 @@ var EDConfig = (function () {
 
   /**
    * Convenience: load commonly-needed groups.
-    * @param {object} [opts]
-    *   - flushCache?: boolean = false       // bypass existing group cache on read
-    *   - render?: 'raw'|'display'|'formula' = 'raw'
-    *   - dateTime?: 'SERIAL_NUMBER'|'FORMATTED_STRING' = 'SERIAL_NUMBER'
-    *   - trim?: boolean = true              // drop rows whose first cell is empty-ish (API-side)
-    * @returns {{loaded:number, fromCache:number, skipped:number}}
+   * @param {object} [opts]
+   *   - flushCache?: boolean = false       // bypass existing group cache on read
+   *   - render?: 'raw'|'display'|'formula' = 'raw'
+   *   - dateTime?: 'SERIAL_NUMBER'|'FORMATTED_STRING' = 'SERIAL_NUMBER'
+   *   - trim?: boolean = true              // drop rows whose first cell is empty-ish (API-side)
+   * @returns {{loaded:number, fromCache:number, skipped:number}}
    */
   function initialize(opts = {}) {
     const {
       boot = true
     } = opts;
-    loadDefs = true;
+    let loadDefs = true; // fixed: avoid implicit global
+
     if (boot) {
       const defs = load([EDContext.context.config.boot], opts);
-      loadDefs = !(defs.loaded == 0 && defs.fromCache == 0)
+      loadDefs = !(defs.loaded == 0 && defs.fromCache == 0);
     }
 
     if (loadDefs) {
       return load([EDContext.context.config.sheet, EDContext.context.config.core], opts);
-    }
-    else {
-        EDLogger.error("Could not load Range Definitions");
+    } else {
+      EDLogger.error("Could not load Range Definitions");
+      return { loaded: 0, fromCache: 0, skipped: 0 };
     }
   }
 
 
-/**
- * Collect A1 ranges from arbitrary config-like objects.
- *
- * @param {any[]} inputs  // array of roots to scan
- * @param {Object} [opts]
- *   - diveValues?: boolean     // default false – do not scan .values payloads
- *   - skipKeys?: string[]      // default ['name','unpack','loaded','cache','prefix']
- *   - normalize?: boolean      // default true – ensure sheet prefix on A1
- *   - ss?: Spreadsheet         // used by ensureSheetOnA1 when normalize=true
- *   - unique?: boolean         // default true – de-duplicate results
- * @returns {{range:string, path:string}[]}
- */
-function _collectA1Ranges_(inputs, opts = {}) {
-  const {
-    diveValues = false,
-    skipKeys = ['name', 'unpack', 'loaded', 'cache', 'prefix'],
-    normalize = true,
-    ss = EDContext.context?.ss,
-    unique = true,
-  } = opts;
+  /**
+   * Collect A1 ranges from arbitrary config-like objects.
+   *
+   * @param {any[]} inputs  // array of roots to scan
+   * @param {Object} [opts]
+   *   - diveValues?: boolean     // default false – do not scan .values payloads
+   *   - skipKeys?: string[]      // default ['name','unpack','loaded','cache','prefix']
+   *   - normalize?: boolean      // default true – ensure sheet prefix on A1
+   *   - ss?: Spreadsheet         // used by ensureSheetOnA1 when normalize=true
+   *   - unique?: boolean         // default true – de-duplicate results
+   * @returns {{range:string, path:string}[]}
+   */
+  function _collectA1Ranges_(inputs, opts = {}) {
+    const {
+      diveValues = false,
+      skipKeys = ['name', 'unpack', 'loaded', 'cache', 'prefix'],
+      normalize = true,
+      ss = EDContext.context?.ss,
+      unique = true,
+    } = opts;
 
-  const out = [];
-  const seen = new Set();
+    const out = [];
+    const seen = new Set();
 
-  const isA1 = (s) => {
-    try { GSRange.parseBox(String(s)); return true; } catch (e) { return false; }
-  };
+    const isA1 = (s) => {
+      try { GSRange.parseBox(String(s)); return true; } catch (e) { return false; }
+    };
 
-  const normA1 = (s) => normalize ? GSRange.ensureSheetOnA1(String(s), ss) : String(s);
+    const normA1 = (s) => normalize ? GSRange.ensureSheetOnA1(String(s), ss) : String(s);
 
-  const push = (range, path) => {
-    const a1 = normA1(range);
-    if (!unique || !seen.has(a1)) {
-      if (unique) seen.add(a1);
-      out.push({ range: a1, path });
-    }
-  };
-
-  const visit = (node, path) => {
-    if (node == null) return;
-
-    // String leaf?
-    if (typeof node === 'string') {
-      if (isA1(node)) push(node, path);
-      return;
-    }
-
-    // Node with explicit .range?
-    if (typeof node === 'object' && typeof node.range === 'string' && isA1(node.range)) {
-      // Record the explicit range; do not descend into .values unless asked.
-      push(node.range, path ? path + '.range' : 'range');
-    }
-
-    // Arrays
-    if (Array.isArray(node)) {
-      // If path indicates .values and diveValues=false, skip scanning payload
-      if (!diveValues && /(^|\.|])values(\.|$|\[)/.test(path || '')) return;
-      for (let i = 0; i < node.length; i++) {
-        visit(node[i], path ? `${path}[${i}]` : `[${i}]`);
+    const push = (range, path) => {
+      const a1 = normA1(range);
+      if (!unique || !seen.has(a1)) {
+        if (unique) seen.add(a1);
+        out.push({ range: a1, path });
       }
-      return;
-    }
+    };
 
-    // Objects
-    if (typeof node === 'object') {
-      for (const k of Object.keys(node)) {
-        if (!diveValues && k === 'values') continue;      // skip heavy payloads by default
-        if (skipKeys && skipKeys.indexOf(k) !== -1) continue; // skip metadata keys
-        visit(node[k], path ? `${path}.${k}` : k);
+    const visit = (node, path) => {
+      if (node == null) return;
+
+      // String leaf?
+      if (typeof node === 'string') {
+        if (isA1(node)) push(node, path);
+        return;
       }
-    }
-  };
 
-  for (let i = 0; i < (inputs?.length || 0); i++) {
-    visit(inputs[i], `arg${i}`);
+      // Node with explicit .range?
+      if (typeof node === 'object' && typeof node.range === 'string' && isA1(node.range)) {
+        // Record the explicit range; do not descend into .values unless asked.
+        push(node.range, path ? path + '.range' : 'range');
+      }
+
+      // Arrays
+      if (Array.isArray(node)) {
+        // If path indicates .values and diveValues=false, skip scanning payload
+        if (!diveValues && /(^|\.|])values(\.|$|\[)/.test(path || '')) return;
+        for (let i = 0; i < node.length; i++) {
+          visit(node[i], path ? `${path}[${i}]` : `[${i}]`);
+        }
+        return;
+      }
+
+      // Objects
+      if (typeof node === 'object') {
+        for (const k of Object.keys(node)) {
+          if (!diveValues && k === 'values') continue;      // skip heavy payloads by default
+          if (skipKeys && skipKeys.indexOf(k) !== -1) continue; // skip metadata keys
+          visit(node[k], path ? `${path}.${k}` : k);
+        }
+      }
+    };
+
+    for (let i = 0; i < (inputs?.length || 0); i++) {
+      visit(inputs[i], `arg${i}`);
+    }
+    return out;
   }
-  return out;
-}
 
+
+  /* ================== private: cache helpers ================== */
 
   function _groupCacheKey(group) {
     // Prefer explicit group name for stability
-
     if (group && typeof group === 'object' && group.name) {
       return GCACHE_PREFIX + group.name;
     }
@@ -392,7 +432,7 @@ function _collectA1Ranges_(inputs, opts = {}) {
       return payload;
     } catch (e) {
       EDLogger.warn('Bad Cache [ ' + cacheKey + ' ] [ ' + e.msg + ' ]');
-      throw e
+      throw e;
     }
   }
 
@@ -411,7 +451,17 @@ function _collectA1Ranges_(inputs, opts = {}) {
     try { props.deleteProperty(cacheKey); } catch (e) {}
   }
 
+  // Centralized meta selection (cache-first; fall back to def.* so old caches work)
+  function _pickDefMeta(def, metaMap, defName) {
+    const m = (metaMap && metaMap[defName]) || {};
+    return {
+      unpack: (m.unpack != null ? m.unpack : def && def.unpack),
+      prefix: (m.prefix != null ? m.prefix : def && def.prefix),
+    };
+  }
 
+
+  /* ================== public: edit hook ================== */
   function configEdited(a1) {
     const { any } = intersect(
       GSRange.ensureSheetOnA1(String(a1), EDContext.context.ss),
@@ -434,5 +484,6 @@ function _collectA1Ranges_(inputs, opts = {}) {
     initialize,
     updateCache,
     configEdited
+    // (intersect is intentionally not exported publicly in original style; keep as-is)
   };
 })();

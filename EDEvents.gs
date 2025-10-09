@@ -99,7 +99,7 @@ class CellEditedEvent extends CellEvent {
 
   fireEvent() {
     var status = EDContext.STATUS.IGNORED;
-    EDConfig.initialize();
+    EDConfig.initialize({boot : false});
 
     this.setStatus(EDContext.STATUS.PROCESSING);
     
