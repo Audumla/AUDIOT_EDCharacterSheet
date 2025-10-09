@@ -99,4 +99,3 @@ function onEditTriggered(e) {
 function fireMeleeAttack(){
   new CellEditedEvent("Visual!$AA$15").trigger();
 }
-

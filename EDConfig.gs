@@ -103,7 +103,7 @@ var EDConfig = (function () {
     }
 
     // Queue ONE batchGet via GSBatchValues (keeps original order)
-    const b = GSBatch.newBatch();
+    const b = GSBatch.newBatch(opts);
     const ranges = pending.map(p => p.range);
     EDLogger.debug("Loading Definitions from Sheet " + JSON.stringify(ranges));
 
@@ -265,12 +265,20 @@ var EDConfig = (function () {
     * @returns {{loaded:number, fromCache:number, skipped:number}}
    */
   function initialize(opts = {}) {
-    const defs = load([EDContext.context.config.boot], opts);
-    if (defs.loaded > 0 || defs.fromCache > 0) {
+    const {
+      boot = true
+    } = opts;
+    loadDefs = true;
+    if (boot) {
+      const defs = load([EDContext.context.config.boot], opts);
+      loadDefs = !(defs.loaded == 0 && defs.fromCache == 0)
+    }
+
+    if (loadDefs) {
       return load([EDContext.context.config.sheet, EDContext.context.config.core], opts);
     }
     else {
-      EDLogger.error("Could not load Range Definitions");
+        EDLogger.error("Could not load Range Definitions");
     }
   }
 
@@ -404,7 +412,7 @@ function _collectA1Ranges_(inputs, opts = {}) {
   }
 
 
-  function checkConfigEdited(a1) {
+  function configEdited(a1) {
     const { any } = intersect(
       GSRange.ensureSheetOnA1(String(a1), EDContext.context.ss),
       EDContext.context.config.sheet,
@@ -413,7 +421,7 @@ function _collectA1Ranges_(inputs, opts = {}) {
     );
 
     if (any) {
-      EDLogger.info(`Configuration Edited [${a1}]`)
+      EDLogger.notify(`Config cell edited [${a1}]`, {title : "Configuration Updated"});
       initialize({ flushCache: true, ignoreLoaded: true });
       return true;
     }
@@ -425,6 +433,6 @@ function _collectA1Ranges_(inputs, opts = {}) {
     load,
     initialize,
     updateCache,
-    checkConfigEdited
+    configEdited
   };
 })();

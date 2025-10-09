@@ -528,17 +528,28 @@ function _repackObject(template, liveRoot) {
   }
 
 
-  function mappingByName(name) {
-    GSUtils.Arr.findRowByColumn(EDContext.context.config.PROPERTY_MAPPINGS.values,0,name);
-  }
-
   function mappingByCell(loc, opts = {}) {
-
-    GSUtils.Arr.findRowByColumn(EDContext.context.config.PROPERTY_MAPPINGS.values,1,loc);
+    let monitored = EDContext.context.event.mappings.find(e => e.cell == loc);
+    if (monitored) {
+      EDLogger.info(`Monitored Cell Triggered [${monitored.event}][${this._cell}]`)
+      if (CHECK_TYPE == monitored?.type) {
+        EDLogger.info(`Activating [${monitored.event}]`)
+        EDLogger.notify(`🎲Rolling!!🎲`,{ title: `Performing ${monitored.event}`})
+        //EDLogger.trace(JSON.stringify(EDProperties.event.getProperties()))
+            // perform the event and then reset the cell
+//          const rng = GSBatch.load.rangesNow([EDContext.context.config.EVENT_PROPERTIES_])
+        GSBatch.add.cell(EDContext.context.batch,monitored.cell,0);
+      }
+      EDLogger.debug(JSON.stringify(monitored));
+    }
+    return monitored;
   }
 
-  function getCharacterProperties() {
-
+  function getEventProperties() {
+    if (!EDContext.context.event?.properties) {
+      EDConfig.load(EDContext.context.config.event, {mode : GSBatch.MODE.SIMPLE});
+    }
+    return EDContext.context.event?.properties;
   }
 
   // Public API
@@ -555,8 +566,9 @@ function _repackObject(template, liveRoot) {
       UNPACK
     },
 
-    mapping : {
-
+    event : {
+      byCell : mappingByCell,
+      getProperties : getEventProperties
     }
 
 

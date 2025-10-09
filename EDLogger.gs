@@ -1,14 +1,14 @@
 var EDLogger = (function () {
   // ---------------- constants ----------------
   var LEVEL = {
-    PERFORMANCE : { level: 1,  name: "PERF "       },
-    TRACE       : { level: 5,  name: "TRACE"       },
-    DEBUG       : { level: 6,  name: "DEBUG"       },
-    WARNING     : { level: 7,  name: "WARN "       },
-    INFO        : { level: 8,  name: "INFO "       },
-    CHARACTER   : { level: 9,  name: "CHAR "       },
-    ERROR       : { level: 15, name: "ERROR"       },
-    NOTIFY      : { level: 15, name: "NOTIFY"      },
+    PERFORMANCE : { level: 1,  name: " PERF "      },
+    TRACE       : { level: 5,  name: "TRACE "      },
+    DEBUG       : { level: 6,  name: "DEBUG "      },
+    WARNING     : { level: 7,  name: " WARN "      },
+    INFO        : { level: 8,  name: " INFO "      },
+    CHARACTER   : { level: 9,  name: " CHAR "      },
+    ERROR       : { level: 15, name: "ERROR "      },
+    NOTIFY      : { level: 98, name: "NOTIFY"      },
     DISABLED    : { level: 99, name: "DISABLED"    },
   };
 
@@ -22,22 +22,27 @@ var EDLogger = (function () {
       batchMerge : false
     },
     console : {
-      level : LEVEL.TRACE.name
+      level : PropertiesService.getScriptProperties().getProperty("CONSOLE_LEVEL") ?? LEVEL.TRACE.name,
+
+    },
+    toast : {
+      level : LEVEL.NOTIFY.name,
+      timeout : 2
     }
   }
 
   // ---------------- helpers ----------------
-  function _entry(levelObj, msg, title, timeout) {
+  function _entry(levelObj, msg, opts = {}) {
     //console.info(msg);
-    const entry = { logLevel: levelObj, ts: new Date(), msg: msg ,state : EDContext.context.event.status.state, title : title, timeout : timeout}
+    const entry = { logLevel: levelObj, ts: new Date(), msg: msg ,state : EDContext.context.event.status.state, opts : opts }
     _buffer.push(entry);
-    _sinks.forEach(s => s(entry,title,timeout));
+    _sinks.forEach(s => s(entry));
   }
 
   // ---------------- sinks ----------------
 
   function _consoleSink(entry) {
-    var minLevel = LEVEL[settings.console.level ?? LEVEL.TRACE.name].level;
+    var minLevel = LEVEL[settings.console.level].level;
     if (entry.logLevel.level < minLevel) return;
     var dt = GSUtils.Date.formatDate(entry.ts);
     const lmsg = (typeof entry.msg === "string" ) ? entry.msg : JSON.stringify(entry.msg);
@@ -47,9 +52,13 @@ var EDLogger = (function () {
   }
 
   function _toastSink(entry) {
-    if (LEVEL.NOTIFY == entry.logLevel && entry.msg) {
-      EDContext.context.ss.toast(entry.msg,entry.title ,entry.timeout);
-    }
+    const {
+      title = "NOTIFICATION",
+      timeout = settings.toast.timeout
+    } = entry.opts;
+    var minLevel = LEVEL[settings.toast.level].level;
+    if (entry.logLevel.level < minLevel) return;
+    EDContext.context.ss.toast(entry.msg,title ,timeout);
   }
 /*
   function _htmlToast(entry) {
@@ -71,7 +80,8 @@ var EDLogger = (function () {
 */
   // console sink
   function _flushConsole(entries) {
-    entries.forEach(e => _consoleSink(e));
+    PropertiesService.getScriptProperties().setProperty("CONSOLE_LEVEL",settings.console.level);
+//    entries.forEach(e => _consoleSink(e));
   }
 
   function _flushSheet(entries) {
@@ -108,21 +118,21 @@ var EDLogger = (function () {
 
   }
 
-  var _bufferSinks = [_flushSheet];
+  var _bufferSinks = [_flushSheet,_flushConsole];
   var _sinks = [_consoleSink,_toastSink];
 
 
   // ---------------- public api ----------------
 
   // emit
-  function perf(msg)      { _entry(LEVEL.PERFORMANCE, msg); }
-  function trace(msg)     { _entry(LEVEL.TRACE, msg); }
-  function debug(msg)     { _entry(LEVEL.DEBUG, msg); }
-  function warn(msg)      { _entry(LEVEL.WARNING, msg); }
-  function info(msg)      { _entry(LEVEL.INFO, msg); }
-  function character(msg) { _entry(LEVEL.CHARACTER, msg); }
-  function error(msg)     { _entry(LEVEL.ERROR, msg); }
-  function notify(msg,title,timeout) { _entry(LEVEL.NOTIFY, msg,title,timeout); }
+  function perf(msg)        { _entry(LEVEL.PERFORMANCE, msg); }
+  function trace(msg)       { _entry(LEVEL.TRACE, msg); }
+  function debug(msg)       { _entry(LEVEL.DEBUG, msg); }
+  function warn(msg)        { _entry(LEVEL.WARNING, msg); }
+  function info(msg)        { _entry(LEVEL.INFO, msg); }
+  function character(msg)   { _entry(LEVEL.CHARACTER, msg); }
+  function error(msg)       { _entry(LEVEL.ERROR, msg); }
+  function notify(msg,opts) { _entry(LEVEL.NOTIFY, msg,opts); }
 
   // flush buffer to sinks
   function flush(opts = {}) {

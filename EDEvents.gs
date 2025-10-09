@@ -88,14 +88,6 @@ class CellEvent extends EDEvent {
     this._name = "Cell Event";
   }
 
-  isCellMonitored() {
-    const mon = GSUtils.Arr.findFirst(EDContext.context.mappings,"cell",this._cell);
-    if (mon != undefined) {
-      EDLogger.info(`Monitored Cell Triggered [${mon.event}][${this._cell}]`)
-    }
-    return mon;
-  }
-
 }
 
 class CellEditedEvent extends CellEvent {
@@ -106,29 +98,13 @@ class CellEditedEvent extends CellEvent {
   }
 
   fireEvent() {
-
     var status = EDContext.STATUS.IGNORED;
     EDConfig.initialize();
 
     this.setStatus(EDContext.STATUS.PROCESSING);
     
-    const monitored = this.isCellMonitored();
-    if (monitored) {
-      if (CHECK_TYPE == monitored?.type) {
-          EDLogger.info(`Activating [${monitored.event}]`)
-          EDLogger.notify(`🎲Rolling!!🎲`,`Performing ${monitored.event}`,10)
-                // perform the event and then reset the cell
-//          const rng = GSBatch.load.rangesNow([EDContext.context.config.EVENT_PROPERTIES_])
-
-          EDLogger.debug(JSON.stringify(monitored));
-          GSBatch.add.cell(EDContext.context.batch,monitored.cell,0);
-          status = EDContext.STATUS.COMPLETED;
-      }
-    }
-    else {
-      if (EDConfig.checkConfigEdited(this._cell)) {
-          status = EDContext.STATUS.COMPLETED;
-      }
+    if (EDProperties.event.byCell(this._cell) || EDConfig.configEdited(this._cell)) {
+      status = EDContext.STATUS.COMPLETED;
     }
 
     if (status == EDContext.STATUS.IGNORED) {
@@ -155,7 +131,7 @@ class InstallTriggerEvent extends EDEvent {
       var r = EDTriggers.install();
       var st = EDTriggers.checkInstalled();
       EDTriggers.writeStatus(st);
-      EDLogger.notify(st.ok ? 'Triggers installed' : 'Trigger install failed', 'ED Tools', 5);
+      EDLogger.notify(st.ok ? 'Triggers installed' : 'Trigger install failed', {title : 'ED Tools'});
       return EDContext.STATUS.COMPLETED;
 
     } finally {

@@ -72,8 +72,8 @@ var GSBatch = (function () {
    * @param {Spreadsheet|string} spreadsheet Spreadsheet or ID. Defaults to active.
    * @param {{mode?:'values'|'singleBatchUpdate'|'simple'}} [opts]
    */
-  function newBatch(spreadsheet, opts = {}) {
-    const ss = _resolveSpreadsheet_(spreadsheet);
+  function newBatch(opts = {}) {
+    const ss = EDContext.context.ss;
     const mode = opts.mode || defaultMode;
     return {
       ss,
